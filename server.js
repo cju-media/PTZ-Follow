@@ -4,7 +4,7 @@ const path = require('path');
 const { Server } = require('node-osc');
 const open = require('open');
 const ffmpeg = require('fluent-ffmpeg');
-const { Camera } = require('visca-over-ip');
+const { ViscaCamera } = require('visca-over-ip');
 
 const PORT = 9356;
 const OSC_PORT = 9357; // Listen on a different port for OSC
@@ -74,7 +74,8 @@ const state = {
 function initVisca(camId, ip) {
     console.log(`Initializing VISCA device for ${camId} at ${ip}...`);
     try {
-        const camera = new Camera(ip);
+        // visca-over-ip requires an IP and a port (default VISCA port is usually 5678 or 52381)
+        const camera = new ViscaCamera(ip, 52381);
         console.log(`VISCA initialized for ${camId}`);
         state.viscaDevices[camId] = camera;
     } catch (err) {
@@ -163,6 +164,29 @@ app.ws('/control', (ws, req) => {
                             });
                         }
                     }
+
+                    // Broadcast state update
+                    wsInstance.getWss().clients.forEach(client => {
+                        if (client.readyState === 1) {
+                            client.send(JSON.stringify({
+                                type: 'state',
+                                cameras: state.cameras
+                            }));
+                        }
+                    });
+                }
+            } else if (data.type === 'remove_camera') {
+                if (state.cameras[data.camId]) {
+                    console.log(`Removing camera ${data.camId}`);
+
+                    // Stop camera if it was tracking
+                    const camera = state.viscaDevices[data.camId];
+                    if (camera && state.cameras[data.camId].trackingEnabled) {
+                        camera.ptz({ pan: 'stop', tilt: 'stop', panSpeed: 1, tiltSpeed: 1 }).catch(() => {});
+                    }
+
+                    delete state.cameras[data.camId];
+                    delete state.viscaDevices[data.camId];
 
                     // Broadcast state update
                     wsInstance.getWss().clients.forEach(client => {
