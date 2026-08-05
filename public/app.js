@@ -1,186 +1,393 @@
-// Initialize WebSocket
 const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const wsUrl = `${wsProtocol}//${window.location.host}/stream`;
+const controlUrl = `${wsProtocol}//${window.location.host}/control`;
 
-// Initialize JSMpeg
-const videoCanvas = document.getElementById('video-canvas');
-let player = null;
+class CameraTracker {
+    constructor(camId, rtmpLink, containerId) {
+        this.camId = camId;
+        this.rtmpLink = rtmpLink;
+        this.container = document.getElementById(containerId);
 
-function startVideo(camId, rtmpLink) {
-    if (player) {
-        player.destroy();
+        this.player = null;
+        this.isDrawing = false;
+        this.startX = 0;
+        this.startY = 0;
+        this.currentRect = null;
+
+        this.isTracking = false;
+        this.tracker = null;
+        this.src = null;
+        this.dst = null;
+
+        this.initUI();
+        this.initVideo();
+        this.initEvents();
     }
-    const streamUrl = `${wsUrl}?id=${encodeURIComponent(camId)}&rtmp=${encodeURIComponent(rtmpLink)}`;
-    player = new JSMpeg.Player(streamUrl, {
-        canvas: videoCanvas,
-        autoplay: true,
-        audio: false
-    });
-}
 
-// Bounding box drawing
-const overlayCanvas = document.getElementById('overlay-canvas');
-const ctx = overlayCanvas.getContext('2d');
+    initUI() {
+        this.container.innerHTML = `
+            <div class="camera-card" id="card-${this.camId}">
+                <h3>${this.camId}</h3>
+                <div class="camera-canvas-container">
+                    <canvas id="video-${this.camId}" width="640" height="480"></canvas>
+                    <canvas id="overlay-${this.camId}" width="640" height="480" style="position: absolute; top: 0; left: 0; pointer-events: none;"></canvas>
+                </div>
+                <button id="track-btn-${this.camId}">Enable Tracking</button>
+            </div>
+        `;
 
-let isDrawing = false;
-let startX = 0, startY = 0;
-let currentRect = null; // { x, y, width, height }
-
-videoCanvas.addEventListener('mousedown', (e) => {
-    isDrawing = true;
-    const rect = videoCanvas.getBoundingClientRect();
-    startX = e.clientX - rect.left;
-    startY = e.clientY - rect.top;
-    currentRect = null; // Reset previous drawing
-});
-
-videoCanvas.addEventListener('mousemove', (e) => {
-    if (!isDrawing) return;
-
-    const rect = videoCanvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    const width = mouseX - startX;
-    const height = mouseY - startY;
-
-    currentRect = {
-        x: width > 0 ? startX : mouseX,
-        y: height > 0 ? startY : mouseY,
-        width: Math.abs(width),
-        height: Math.abs(height)
-    };
-
-    drawOverlay();
-});
-
-videoCanvas.addEventListener('mouseup', () => {
-    isDrawing = false;
-    if (currentRect && (currentRect.width < 10 || currentRect.height < 10)) {
-        currentRect = null; // Ignore tiny clicks
+        this.videoCanvas = document.getElementById(`video-${this.camId}`);
+        this.overlayCanvas = document.getElementById(`overlay-${this.camId}`);
+        this.ctx = this.overlayCanvas.getContext('2d');
+        this.trackBtn = document.getElementById(`track-btn-${this.camId}`);
     }
-    drawOverlay();
-});
 
-function drawOverlay() {
-    ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-
-    if (currentRect) {
-        ctx.strokeStyle = 'red';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(currentRect.x, currentRect.y, currentRect.width, currentRect.height);
+    initVideo() {
+        if (this.player) this.player.destroy();
+        const streamUrl = `${wsUrl}?id=${encodeURIComponent(this.camId)}&rtmp=${encodeURIComponent(this.rtmpLink)}`;
+        this.player = new JSMpeg.Player(streamUrl, {
+            canvas: this.videoCanvas,
+            autoplay: true,
+            audio: false
+        });
     }
-}
 
-// OpenCV Tracking Logic
-let isTracking = false;
-let tracker = null;
-let src = null;
-let dst = null;
+    initEvents() {
+        this.videoCanvas.addEventListener('mousedown', (e) => {
+            this.isDrawing = true;
+            const rect = this.videoCanvas.getBoundingClientRect();
+            // Calculate scale
+            const scaleX = this.videoCanvas.width / rect.width;
+            const scaleY = this.videoCanvas.height / rect.height;
 
-// The OpenCV.js load is asynchronous, we must wait for it to be ready
-function initTracker() {
-    if (!tracker) {
-        tracker = new cv.TrackerCSRT();
-    }
-    src = new cv.Mat(videoCanvas.height, videoCanvas.width, cv.CV_8UC4);
-    dst = new cv.Mat(videoCanvas.height, videoCanvas.width, cv.CV_8UC4);
+            this.startX = (e.clientX - rect.left) * scaleX;
+            this.startY = (e.clientY - rect.top) * scaleY;
+            this.currentRect = null;
+        });
 
-    const rect = new cv.Rect(currentRect.x, currentRect.y, currentRect.width, currentRect.height);
-    const videoCtx = videoCanvas.getContext('2d');
-    const imageData = videoCtx.getImageData(0, 0, videoCanvas.width, videoCanvas.height);
-    src.data.set(imageData.data);
+        this.videoCanvas.addEventListener('mousemove', (e) => {
+            if (!this.isDrawing) return;
 
-    tracker.init(src, rect);
-    isTracking = true;
-    setTimeout(processVideo, 100);
-}
+            const rect = this.videoCanvas.getBoundingClientRect();
+            const scaleX = this.videoCanvas.width / rect.width;
+            const scaleY = this.videoCanvas.height / rect.height;
 
-function stopTracker() {
-    isTracking = false;
-    if (src) src.delete();
-    if (dst) dst.delete();
-    // if (tracker) tracker.delete(); // Might throw, better to just let GC or reset
-    src = null;
-    dst = null;
-    currentRect = null;
-    drawOverlay();
-}
+            const mouseX = (e.clientX - rect.left) * scaleX;
+            const mouseY = (e.clientY - rect.top) * scaleY;
 
-function processVideo() {
-    if (!isTracking || !currentRect) return;
+            const width = mouseX - this.startX;
+            const height = mouseY - this.startY;
 
-    try {
-        const videoCtx = videoCanvas.getContext('2d');
-        const imageData = videoCtx.getImageData(0, 0, videoCanvas.width, videoCanvas.height);
-        src.data.set(imageData.data);
-
-        // Update the tracker
-        let newRect = new cv.Rect();
-        const success = tracker.update(src, newRect);
-
-        if (success) {
-            currentRect = {
-                x: newRect.x,
-                y: newRect.y,
-                width: newRect.width,
-                height: newRect.height
+            this.currentRect = {
+                x: width > 0 ? this.startX : mouseX,
+                y: height > 0 ? this.startY : mouseY,
+                width: Math.abs(width),
+                height: Math.abs(height)
             };
-            drawOverlay();
 
-            // Calculate center deviation
-            const centerX = currentRect.x + currentRect.width / 2;
-            const centerY = currentRect.y + currentRect.height / 2;
-            const frameCenterX = videoCanvas.width / 2;
-            const frameCenterY = videoCanvas.height / 2;
+            this.drawOverlay();
+        });
 
-            // Normalized deviation (-1 to 1)
-            const devX = (centerX - frameCenterX) / frameCenterX;
-            const devY = (centerY - frameCenterY) / frameCenterY;
+        this.videoCanvas.addEventListener('mouseup', () => {
+            this.isDrawing = false;
+            if (this.currentRect && (this.currentRect.width < 10 || this.currentRect.height < 10)) {
+                this.currentRect = null;
+            }
+            this.drawOverlay();
+        });
 
-            // Send correction to server via WebSocket
-            const controlProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const controlUrl = `${controlProtocol}//${window.location.host}/control`;
-            if (!window.controlWs || window.controlWs.readyState !== WebSocket.OPEN) {
-                window.controlWs = new WebSocket(controlUrl);
+        this.trackBtn.addEventListener('click', () => {
+            if (this.isTracking) {
+                if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
+                     window.controlWs.send(JSON.stringify({ type: 'tracking_toggle', camId: this.camId, enabled: false }));
+                }
+                this.stopTracker();
+                this.trackBtn.textContent = 'Enable Tracking';
+                this.trackBtn.classList.remove('tracking-active');
             } else {
-                const camId = document.getElementById('cam-id').value;
-                if (camId) {
-                    window.controlWs.send(JSON.stringify({
-                        type: 'ptz_correction',
-                        camId: camId,
-                        pan: devX,
-                        tilt: -devY // Invert Y for tilt
-                    }));
+                if (typeof cv !== 'undefined' && cv.TrackerCSRT && this.currentRect) {
+                    if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
+                         window.controlWs.send(JSON.stringify({ type: 'tracking_toggle', camId: this.camId, enabled: true }));
+                    }
+                    this.initTracker();
+                    this.trackBtn.textContent = 'Disable Tracking';
+                    this.trackBtn.classList.add('tracking-active');
+                } else {
+                    alert('Please draw a bounding box first or wait for OpenCV to load.');
                 }
             }
+        });
+    }
 
-        } else {
-            console.log("Tracking lost");
-            // Send a stop command if tracking is lost
-            if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
-                const camId = document.getElementById('cam-id').value;
-                if (camId) {
+    drawOverlay() {
+        this.ctx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+        if (this.currentRect) {
+            this.ctx.strokeStyle = 'red';
+            this.ctx.lineWidth = 2;
+            this.ctx.strokeRect(this.currentRect.x, this.currentRect.y, this.currentRect.width, this.currentRect.height);
+        }
+    }
+
+    initTracker() {
+        if (!this.tracker) {
+            this.tracker = new cv.TrackerCSRT();
+        }
+        this.src = new cv.Mat(this.videoCanvas.height, this.videoCanvas.width, cv.CV_8UC4);
+        this.dst = new cv.Mat(this.videoCanvas.height, this.videoCanvas.width, cv.CV_8UC4);
+
+        const rect = new cv.Rect(this.currentRect.x, this.currentRect.y, this.currentRect.width, this.currentRect.height);
+        const videoCtx = this.videoCanvas.getContext('2d');
+        const imageData = videoCtx.getImageData(0, 0, this.videoCanvas.width, this.videoCanvas.height);
+        this.src.data.set(imageData.data);
+
+        this.tracker.init(this.src, rect);
+        this.isTracking = true;
+
+        this.processVideo();
+    }
+
+    stopTracker() {
+        this.isTracking = false;
+        if (this.src) this.src.delete();
+        if (this.dst) this.dst.delete();
+        this.src = null;
+        this.dst = null;
+        this.currentRect = null;
+        this.drawOverlay();
+    }
+
+    processVideo() {
+        if (!this.isTracking || !this.currentRect) return;
+
+        try {
+            const videoCtx = this.videoCanvas.getContext('2d');
+            const imageData = videoCtx.getImageData(0, 0, this.videoCanvas.width, this.videoCanvas.height);
+            this.src.data.set(imageData.data);
+
+            let newRect = new cv.Rect();
+            const success = this.tracker.update(this.src, newRect);
+
+            if (success) {
+                this.currentRect = {
+                    x: newRect.x,
+                    y: newRect.y,
+                    width: newRect.width,
+                    height: newRect.height
+                };
+                this.drawOverlay();
+
+                const centerX = this.currentRect.x + this.currentRect.width / 2;
+                const centerY = this.currentRect.y + this.currentRect.height / 2;
+                const frameCenterX = this.videoCanvas.width / 2;
+                const frameCenterY = this.videoCanvas.height / 2;
+
+                const devX = (centerX - frameCenterX) / frameCenterX;
+                const devY = (centerY - frameCenterY) / frameCenterY;
+
+                if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
+                    window.controlWs.send(JSON.stringify({
+                        type: 'ptz_correction',
+                        camId: this.camId,
+                        pan: devX,
+                        tilt: -devY
+                    }));
+                }
+            } else {
+                console.log(`Tracking lost for ${this.camId}`);
+                if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
                      window.controlWs.send(JSON.stringify({
                          type: 'ptz_correction',
-                         camId: camId,
+                         camId: this.camId,
                          pan: 0,
                          tilt: 0
                      }));
                 }
             }
+        } catch (err) {
+            console.error(err);
         }
-    } catch (err) {
-        console.error(err);
+
+        if (this.isTracking) {
+            setTimeout(() => this.processVideo(), 100);
+        }
     }
 
-    if (isTracking) {
-        setTimeout(processVideo, 100); // Process at ~10Hz
+    destroy() {
+        this.isTracking = false;
+        if (this.player) {
+            this.player.destroy();
+        }
+        this.container.innerHTML = '';
+    }
+
+    setServerTrackingState(enabled) {
+        if (enabled && !this.isTracking && typeof cv !== 'undefined' && cv.TrackerCSRT && this.currentRect) {
+             this.initTracker();
+             this.trackBtn.textContent = 'Disable Tracking';
+             this.trackBtn.classList.add('tracking-active');
+        } else if (!enabled && this.isTracking) {
+             this.stopTracker();
+             this.trackBtn.textContent = 'Enable Tracking';
+             this.trackBtn.classList.remove('tracking-active');
+        }
     }
 }
 
-const controlProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-const controlUrl = `${controlProtocol}//${window.location.host}/control`;
+// Global State
+let cameraTrackers = {};
+let serverCameras = {};
+
+function syncCameraGrid(cameras) {
+    const grid = document.getElementById('camera-grid');
+
+    // Check for removed cameras
+    Object.keys(cameraTrackers).forEach(id => {
+        if (!cameras[id]) {
+            cameraTrackers[id].destroy();
+            delete cameraTrackers[id];
+        }
+    });
+
+    // Check for new/updated cameras
+    Object.keys(cameras).forEach(id => {
+        if (!cameraTrackers[id]) {
+            // Create container for new camera
+            const container = document.createElement('div');
+            container.id = `tracker-container-${id}`;
+            grid.appendChild(container);
+
+            // Init new tracker
+            cameraTrackers[id] = new CameraTracker(id, cameras[id].rtmp, container.id);
+        } else if (cameraTrackers[id].rtmpLink !== cameras[id].rtmp) {
+            // Re-init video if RTMP changed
+            cameraTrackers[id].rtmpLink = cameras[id].rtmp;
+            cameraTrackers[id].initVideo();
+        }
+
+        // Sync tracking state
+        cameraTrackers[id].setServerTrackingState(cameras[id].trackingEnabled);
+    });
+}
+
+// Modal Logic
+const modal = document.getElementById("camera-modal");
+const btn = document.getElementById("open-modal-btn");
+const span = document.getElementsByClassName("close")[0];
+const addCamBtn = document.getElementById("add-cam-btn");
+const cameraList = document.getElementById("camera-list");
+
+btn.onclick = function() {
+  modal.style.display = "block";
+  renderCameraList();
+}
+
+span.onclick = function() {
+  modal.style.display = "none";
+}
+
+window.onclick = function(event) {
+  if (event.target == modal) {
+    modal.style.display = "none";
+  }
+}
+
+function renderCameraList() {
+    cameraList.innerHTML = '';
+    Object.keys(serverCameras).forEach(id => {
+        const cam = serverCameras[id];
+        const statusClass = cam.trackingEnabled ? 'connected' : 'disconnected'; // Or real ping status if implemented
+        // We will just use 'connected' as a placeholder for it exists in state
+
+        const camItem = document.createElement('div');
+        camItem.className = 'cam-list-item';
+        camItem.innerHTML = `
+            <div class="cam-list-header" onclick="this.nextElementSibling.classList.toggle('expanded')">
+                <span><span class="cam-status connected"></span> ${id}</span>
+                <span>▼</span>
+            </div>
+            <div class="cam-details">
+                <div class="form-group">
+                    <label>VISCA IP:</label>
+                    <input type="text" id="edit-ip-${id}" value="${cam.ip}">
+                </div>
+                <div class="form-group">
+                    <label>RTMP Link:</label>
+                    <input type="text" id="edit-rtmp-${id}" value="${cam.rtmp}">
+                </div>
+                <div class="modal-actions">
+                    <button class="btn btn-remove" onclick="removeCamera('${id}')">Remove</button>
+                    <button class="btn btn-save" onclick="updateCamera('${id}')">Save Changes</button>
+                </div>
+            </div>
+        `;
+        cameraList.appendChild(camItem);
+    });
+}
+
+addCamBtn.onclick = function() {
+    const newId = `cam${Object.keys(serverCameras).length + 1}`;
+
+    const camItem = document.createElement('div');
+    camItem.className = 'cam-list-item';
+    camItem.innerHTML = `
+        <div class="cam-list-header" onclick="this.nextElementSibling.classList.toggle('expanded')">
+            <span><span class="cam-status disconnected"></span> New Camera</span>
+            <span>▼</span>
+        </div>
+        <div class="cam-details expanded">
+            <div class="form-group">
+                <label>Camera ID:</label>
+                <input type="text" id="new-id" value="${newId}">
+            </div>
+            <div class="form-group">
+                <label>VISCA IP:</label>
+                <input type="text" id="new-ip" placeholder="192.168.1.100">
+            </div>
+            <div class="form-group">
+                <label>RTMP Link:</label>
+                <input type="text" id="new-rtmp" placeholder="rtmp://...">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-save" onclick="addNewCamera(this)">Add</button>
+            </div>
+        </div>
+    `;
+    cameraList.appendChild(camItem);
+};
+
+window.addNewCamera = function(btnElem) {
+    const parent = btnElem.closest('.cam-details');
+    const id = parent.querySelector('#new-id').value;
+    const ip = parent.querySelector('#new-ip').value;
+    const rtmp = parent.querySelector('#new-rtmp').value;
+
+    if (id && ip && rtmp) {
+        if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
+            window.controlWs.send(JSON.stringify({ type: 'setup', camId: id, camIp: ip, camRtmp: rtmp }));
+        }
+    } else {
+        alert("Please fill all fields");
+    }
+};
+
+window.updateCamera = function(id) {
+    const ip = document.getElementById(`edit-ip-${id}`).value;
+    const rtmp = document.getElementById(`edit-rtmp-${id}`).value;
+
+    if (ip && rtmp) {
+        if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
+            window.controlWs.send(JSON.stringify({ type: 'setup', camId: id, camIp: ip, camRtmp: rtmp }));
+        }
+    } else {
+        alert("Please fill all fields");
+    }
+};
+
+window.removeCamera = function(id) {
+    if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
+        window.controlWs.send(JSON.stringify({ type: 'remove_camera', camId: id }));
+    }
+};
 
 function initControlWs() {
     if (!window.controlWs || window.controlWs.readyState !== WebSocket.OPEN) {
@@ -190,37 +397,11 @@ function initControlWs() {
             try {
                 const data = JSON.parse(event.data);
                 if (data.type === 'state') {
-                    // Update UI and tracker based on OSC state from server
-
-                    const camIdInput = document.getElementById('cam-id');
-                    const currentCamId = camIdInput.value;
-
-                    // 1. Auto-fill and start video if cameras are setup via OSC and nothing is playing
-                    if (data.cameras && Object.keys(data.cameras).length > 0) {
-                        const firstCamId = Object.keys(data.cameras)[0];
-                        const camData = data.cameras[firstCamId];
-
-                        if (!player && !currentCamId) {
-                             camIdInput.value = firstCamId;
-                             document.getElementById('cam-ip').value = camData.ip;
-                             document.getElementById('cam-rtmp').value = camData.rtmp;
-                             startVideo(firstCamId, camData.rtmp);
-                        }
-                    }
-
-                    // 2. Toggle tracking based on server state for the current camera
-                    const activeCamId = camIdInput.value;
-                    if (activeCamId && data.cameras && data.cameras[activeCamId]) {
-                        const camTrackingEnabled = data.cameras[activeCamId].trackingEnabled;
-                        const btn = document.getElementById('tracking-btn');
-
-                        if (camTrackingEnabled && !isTracking && typeof cv !== 'undefined' && cv.TrackerCSRT && currentRect) {
-                             initTracker();
-                             btn.textContent = 'Disable Tracking';
-                        } else if (!camTrackingEnabled && isTracking) {
-                             stopTracker();
-                             btn.textContent = 'Enable Tracking';
-                        }
+                    serverCameras = data.cameras;
+                    syncCameraGrid(serverCameras);
+                    if (modal.style.display === "block") {
+                        // Re-render modal if open to show changes
+                        renderCameraList();
                     }
                 }
             } catch (err) {
@@ -235,52 +416,3 @@ function initControlWs() {
 }
 
 initControlWs();
-
-document.getElementById('setup-btn').addEventListener('click', () => {
-    const camId = document.getElementById('cam-id').value;
-    const camIp = document.getElementById('cam-ip').value;
-    const camRtmp = document.getElementById('cam-rtmp').value;
-
-    if (camId && camIp && camRtmp) {
-        if (!window.controlWs || window.controlWs.readyState !== WebSocket.OPEN) {
-            initControlWs();
-            window.controlWs.onopen = () => {
-                window.controlWs.send(JSON.stringify({ type: 'setup', camId, camIp, camRtmp }));
-            };
-        } else {
-            window.controlWs.send(JSON.stringify({ type: 'setup', camId, camIp, camRtmp }));
-        }
-
-        startVideo(camId, camRtmp);
-    } else {
-        alert("Please fill all fields");
-    }
-});
-
-document.getElementById('tracking-btn').addEventListener('click', () => {
-    const camId = document.getElementById('cam-id').value;
-    if (!camId) {
-        alert("Please set up a camera first.");
-        return;
-    }
-
-    if (isTracking) {
-        // Stop tracking
-        if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
-             window.controlWs.send(JSON.stringify({ type: 'tracking_toggle', camId: camId, enabled: false }));
-        }
-        stopTracker();
-        document.getElementById('tracking-btn').textContent = 'Enable Tracking';
-    } else {
-        if (typeof cv !== 'undefined' && cv.TrackerCSRT && currentRect) {
-            // Start tracking
-            if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
-                 window.controlWs.send(JSON.stringify({ type: 'tracking_toggle', camId: camId, enabled: true }));
-            }
-            initTracker();
-            document.getElementById('tracking-btn').textContent = 'Disable Tracking';
-        } else {
-            alert('Please draw a bounding box first or wait for OpenCV to load.');
-        }
-    }
-});
