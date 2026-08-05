@@ -3,9 +3,9 @@ const wsUrl = `${wsProtocol}//${window.location.host}/stream`;
 const controlUrl = `${wsProtocol}//${window.location.host}/control`;
 
 class CameraTracker {
-    constructor(camId, rtmpLink, containerId) {
+    constructor(camId, srtLink, containerId) {
         this.camId = camId;
-        this.rtmpLink = rtmpLink;
+        this.srtLink = srtLink;
         this.container = document.getElementById(containerId);
 
         this.player = null;
@@ -44,7 +44,7 @@ class CameraTracker {
 
     initVideo() {
         if (this.player) this.player.destroy();
-        const streamUrl = `${wsUrl}?id=${encodeURIComponent(this.camId)}&rtmp=${encodeURIComponent(this.rtmpLink)}`;
+        const streamUrl = `${wsUrl}?id=${encodeURIComponent(this.camId)}&srt=${encodeURIComponent(this.srtLink)}`;
         this.player = new JSMpeg.Player(streamUrl, {
             canvas: this.videoCanvas,
             autoplay: true,
@@ -218,7 +218,7 @@ class CameraTracker {
         if (this.player) {
             this.player.destroy();
         }
-        this.container.innerHTML = '';
+        this.container.remove();
     }
 
     setServerTrackingState(enabled) {
@@ -258,10 +258,10 @@ function syncCameraGrid(cameras) {
             grid.appendChild(container);
 
             // Init new tracker
-            cameraTrackers[id] = new CameraTracker(id, cameras[id].rtmp, container.id);
-        } else if (cameraTrackers[id].rtmpLink !== cameras[id].rtmp) {
-            // Re-init video if RTMP changed
-            cameraTrackers[id].rtmpLink = cameras[id].rtmp;
+            cameraTrackers[id] = new CameraTracker(id, cameras[id].srt, container.id);
+        } else if (cameraTrackers[id].srtLink !== cameras[id].srt) {
+            // Re-init video if SRT changed
+            cameraTrackers[id].srtLink = cameras[id].srt;
             cameraTrackers[id].initVideo();
         }
 
@@ -312,8 +312,8 @@ function renderCameraList() {
                     <input type="text" id="edit-ip-${id}" value="${cam.ip}">
                 </div>
                 <div class="form-group">
-                    <label>RTMP Link:</label>
-                    <input type="text" id="edit-rtmp-${id}" value="${cam.rtmp}">
+                    <label>SRT Link:</label>
+                    <input type="text" id="edit-srt-${id}" value="${cam.srt}">
                 </div>
                 <div class="modal-actions">
                     <button class="btn btn-remove" onclick="removeCamera('${id}')">Remove</button>
@@ -345,8 +345,8 @@ addCamBtn.onclick = function() {
                 <input type="text" id="new-ip" list="discovered-ips" placeholder="192.168.1.100">
             </div>
             <div class="form-group">
-                <label>RTMP Link:</label>
-                <input type="text" id="new-rtmp" placeholder="rtmp://...">
+                <label>SRT Link:</label>
+                <input type="text" id="new-srt" placeholder="srt://...">
             </div>
             <div class="modal-actions">
                 <button class="btn btn-save" onclick="addNewCamera(this)">Add</button>
@@ -360,11 +360,11 @@ window.addNewCamera = function(btnElem) {
     const parent = btnElem.closest('.cam-details');
     const id = parent.querySelector('#new-id').value;
     const ip = parent.querySelector('#new-ip').value;
-    const rtmp = parent.querySelector('#new-rtmp').value;
+    const srt = parent.querySelector('#new-srt').value;
 
-    if (id && ip && rtmp) {
+    if (id && ip && srt) {
         if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
-            window.controlWs.send(JSON.stringify({ type: 'setup', camId: id, camIp: ip, camRtmp: rtmp }));
+            window.controlWs.send(JSON.stringify({ type: 'setup', camId: id, camIp: ip, camSrt: srt }));
         }
     } else {
         alert("Please fill all fields");
@@ -373,11 +373,11 @@ window.addNewCamera = function(btnElem) {
 
 window.updateCamera = function(id) {
     const ip = document.getElementById(`edit-ip-${id}`).value;
-    const rtmp = document.getElementById(`edit-rtmp-${id}`).value;
+    const srt = document.getElementById(`edit-srt-${id}`).value;
 
-    if (ip && rtmp) {
+    if (ip && srt) {
         if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
-            window.controlWs.send(JSON.stringify({ type: 'setup', camId: id, camIp: ip, camRtmp: rtmp }));
+            window.controlWs.send(JSON.stringify({ type: 'setup', camId: id, camIp: ip, camSrt: srt }));
         }
     } else {
         alert("Please fill all fields");
@@ -462,12 +462,12 @@ loadConfigInput.addEventListener('change', (event) => {
                     setTimeout(() => {
                         Object.keys(config).forEach(id => {
                             const camData = config[id];
-                            if (camData && camData.ip && camData.rtmp) {
+                            if (camData && camData.ip && camData.srt) {
                                 window.controlWs.send(JSON.stringify({
                                     type: 'setup',
                                     camId: id,
                                     camIp: camData.ip,
-                                    camRtmp: camData.rtmp
+                                    camSrt: camData.srt
                                 }));
                             }
                         });

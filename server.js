@@ -17,25 +17,25 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Video stream websocket handler
 app.ws('/stream', (ws, req) => {
     const camId = req.query.id;
-    const rtmpQuery = req.query.rtmp;
+    const srtQuery = req.query.srt;
 
-    // Resolve RTMP link: try from state first (OSC setup), then query param
-    let rtmpLink = null;
-    if (camId && state.cameras[camId] && state.cameras[camId].rtmp) {
-        rtmpLink = state.cameras[camId].rtmp;
-    } else if (rtmpQuery) {
-        rtmpLink = rtmpQuery;
+    // Resolve SRT link: try from state first (OSC setup), then query param
+    let srtLink = null;
+    if (camId && state.cameras[camId] && state.cameras[camId].srt) {
+        srtLink = state.cameras[camId].srt;
+    } else if (srtQuery) {
+        srtLink = srtQuery;
     }
 
-    if (!rtmpLink) {
-        console.error("No RTMP link provided or configured for the given ID.");
+    if (!srtLink) {
+        console.error("No SRT link provided or configured for the given ID.");
         ws.close();
         return;
     }
 
-    console.log(`Starting FFmpeg for stream: ${rtmpLink}`);
+    console.log(`Starting FFmpeg for stream: ${srtLink}`);
 
-    const command = ffmpeg(rtmpLink)
+    const command = ffmpeg(srtLink)
         .inputOptions([
             '-analyzeduration 100M',
             '-probesize 100M',
@@ -60,14 +60,14 @@ app.ws('/stream', (ws, req) => {
     });
 
     ws.on('close', () => {
-        console.log(`Closing FFmpeg stream for: ${rtmpLink}`);
+        console.log(`Closing FFmpeg stream for: ${srtLink}`);
         command.kill();
     });
 });
 
 // Store global state
 const state = {
-    cameras: {}, // Format: { id: { ip, rtmp, trackingEnabled: boolean } }
+    cameras: {}, // Format: { id: { ip, srt, trackingEnabled: boolean } }
     viscaDevices: {} // Format: { id: Visca Camera instance }
 };
 
@@ -124,8 +124,8 @@ app.ws('/control', (ws, req) => {
             const data = JSON.parse(msg);
             if (data.type === 'setup') {
                 const trackingEnabled = state.cameras[data.camId] ? state.cameras[data.camId].trackingEnabled : false;
-                state.cameras[data.camId] = { ip: data.camIp, rtmp: data.camRtmp, trackingEnabled };
-                console.log(`UI Setup updated for ID ${data.camId}: IP=${data.camIp}, RTMP=${data.camRtmp}`);
+                state.cameras[data.camId] = { ip: data.camIp, srt: data.camSrt, trackingEnabled };
+                console.log(`UI Setup updated for ID ${data.camId}: IP=${data.camIp}, SRT=${data.camSrt}`);
                 initVisca(data.camId, data.camIp);
             } else if (data.type === 'ptz_correction') {
                 const trackingEnabled = state.cameras[data.camId] ? state.cameras[data.camId].trackingEnabled : false;
@@ -160,7 +160,7 @@ app.ws('/control', (ws, req) => {
                             console.error("PTZ Move Error", e);
                         });
                     } else {
-                        camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 3, 3)).catch(e => {
+                        camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03)).catch(e => {
                             console.error("PTZ Stop Error", e);
                         });
                     }
@@ -174,7 +174,7 @@ app.ws('/control', (ws, req) => {
                     if (!data.enabled) {
                         const camera = state.viscaDevices[data.camId];
                         if (camera) {
-                            camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 3, 3)).catch(e => {
+                            camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03)).catch(e => {
                                 console.error("PTZ Stop Error on Toggle", e);
                             });
                         }
@@ -197,7 +197,7 @@ app.ws('/control', (ws, req) => {
                     // Stop camera if it was tracking
                     const camera = state.viscaDevices[data.camId];
                     if (camera && state.cameras[data.camId].trackingEnabled) {
-                        camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 3, 3)).catch(() => {});
+                        camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03)).catch(() => {});
                     }
 
                     delete state.cameras[data.camId];
@@ -249,7 +249,7 @@ oscServer.on('message', (msg) => {
             if (!enabled) {
                 const camera = state.viscaDevices[id];
                 if (camera) {
-                    camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 3, 3)).catch(e => {
+                    camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03)).catch(e => {
                         console.error("PTZ Stop Error on OSC Toggle", e);
                     });
                 }
@@ -271,10 +271,10 @@ oscServer.on('message', (msg) => {
         if (args.length >= 3) {
             const id = args[0];
             const ip = args[1];
-            const rtmp = args[2];
+            const srt = args[2];
             const trackingEnabled = state.cameras[id] ? state.cameras[id].trackingEnabled : false;
-            state.cameras[id] = { ip, rtmp, trackingEnabled };
-            console.log(`Camera setup updated for ID ${id}: IP=${ip}, RTMP=${rtmp}`);
+            state.cameras[id] = { ip, srt, trackingEnabled };
+            console.log(`Camera setup updated for ID ${id}: IP=${ip}, SRT=${srt}`);
             initVisca(id, ip);
             // Broadcast state update
             wsInstance.getWss().clients.forEach(client => {
