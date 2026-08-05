@@ -312,8 +312,8 @@ function renderCameraList() {
                     <input type="text" id="edit-ip-${id}" value="${cam.ip}">
                 </div>
                 <div class="form-group">
-                    <label>SRT Link:</label>
-                    <input type="text" id="edit-srt-${id}" value="${cam.srt}">
+                    <label>SRT Port:</label>
+                    <input type="number" id="edit-srt-port-${id}" value="${cam.srt.split(':').pop()}">
                 </div>
                 <div class="modal-actions">
                     <button class="btn btn-remove" onclick="removeCamera('${id}')">Remove</button>
@@ -345,8 +345,8 @@ addCamBtn.onclick = function() {
                 <input type="text" id="new-ip" list="discovered-ips" placeholder="192.168.1.100">
             </div>
             <div class="form-group">
-                <label>SRT Link:</label>
-                <input type="text" id="new-srt" placeholder="srt://...">
+                <label>SRT Port:</label>
+                <input type="number" id="new-srt-port" placeholder="5000">
             </div>
             <div class="modal-actions">
                 <button class="btn btn-save" onclick="addNewCamera(this)">Add</button>
@@ -360,11 +360,12 @@ window.addNewCamera = function(btnElem) {
     const parent = btnElem.closest('.cam-details');
     const id = parent.querySelector('#new-id').value;
     const ip = parent.querySelector('#new-ip').value;
-    const srt = parent.querySelector('#new-srt').value;
+    const srtPort = parent.querySelector('#new-srt-port').value;
 
-    if (id && ip && srt) {
+    if (id && ip && srtPort) {
+        const srtLink = `srt://${ip}:${srtPort}`;
         if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
-            window.controlWs.send(JSON.stringify({ type: 'setup', camId: id, camIp: ip, camSrt: srt }));
+            window.controlWs.send(JSON.stringify({ type: 'setup', camId: id, camIp: ip, camSrt: srtLink }));
         }
     } else {
         alert("Please fill all fields");
@@ -373,11 +374,12 @@ window.addNewCamera = function(btnElem) {
 
 window.updateCamera = function(id) {
     const ip = document.getElementById(`edit-ip-${id}`).value;
-    const srt = document.getElementById(`edit-srt-${id}`).value;
+    const srtPort = document.getElementById(`edit-srt-port-${id}`).value;
 
-    if (ip && srt) {
+    if (ip && srtPort) {
+        const srtLink = `srt://${ip}:${srtPort}`;
         if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
-            window.controlWs.send(JSON.stringify({ type: 'setup', camId: id, camIp: ip, camSrt: srt }));
+            window.controlWs.send(JSON.stringify({ type: 'setup', camId: id, camIp: ip, camSrt: srtLink }));
         }
     } else {
         alert("Please fill all fields");
