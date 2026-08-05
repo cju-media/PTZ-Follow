@@ -3,9 +3,9 @@ const wsUrl = `${wsProtocol}//${window.location.host}/stream`;
 const controlUrl = `${wsProtocol}//${window.location.host}/control`;
 
 class CameraTracker {
-    constructor(camId, srtLink, containerId) {
+    constructor(camId, rtspLink, containerId) {
         this.camId = camId;
-        this.srtLink = srtLink;
+        this.rtspLink = rtspLink;
         this.container = document.getElementById(containerId);
 
         this.player = null;
@@ -44,7 +44,7 @@ class CameraTracker {
 
     initVideo() {
         if (this.player) this.player.destroy();
-        const streamUrl = `${wsUrl}?id=${encodeURIComponent(this.camId)}&srt=${encodeURIComponent(this.srtLink)}`;
+        const streamUrl = `${wsUrl}?id=${encodeURIComponent(this.camId)}&rtsp=${encodeURIComponent(this.rtspLink)}`;
         this.player = new JSMpeg.Player(streamUrl, {
             canvas: this.videoCanvas,
             autoplay: true,
@@ -258,10 +258,10 @@ function syncCameraGrid(cameras) {
             grid.appendChild(container);
 
             // Init new tracker
-            cameraTrackers[id] = new CameraTracker(id, cameras[id].srt, container.id);
-        } else if (cameraTrackers[id].srtLink !== cameras[id].srt) {
-            // Re-init video if SRT changed
-            cameraTrackers[id].srtLink = cameras[id].srt;
+            cameraTrackers[id] = new CameraTracker(id, cameras[id].rtsp, container.id);
+        } else if (cameraTrackers[id].rtspLink !== cameras[id].rtsp) {
+            // Re-init video if RTSP changed
+            cameraTrackers[id].rtspLink = cameras[id].rtsp;
             cameraTrackers[id].initVideo();
         }
 
@@ -312,8 +312,8 @@ function renderCameraList() {
                     <input type="text" id="edit-ip-${id}" value="${cam.ip}">
                 </div>
                 <div class="form-group">
-                    <label>SRT Port:</label>
-                    <input type="number" id="edit-srt-port-${id}" value="${cam.srt.split(':').pop()}">
+                    <label>RTSP Link:</label>
+                    <input type="text" id="edit-rtsp-${id}" value="${cam.rtsp}">
                 </div>
                 <div class="modal-actions">
                     <button class="btn btn-remove" onclick="removeCamera('${id}')">Remove</button>
@@ -345,8 +345,8 @@ addCamBtn.onclick = function() {
                 <input type="text" id="new-ip" list="discovered-ips" placeholder="192.168.1.100">
             </div>
             <div class="form-group">
-                <label>SRT Port:</label>
-                <input type="number" id="new-srt-port" placeholder="5000">
+                <label>RTSP Link:</label>
+                <input type="text" id="new-rtsp" placeholder="rtsp://192.168.1.100:554/live/av0">
             </div>
             <div class="modal-actions">
                 <button class="btn btn-save" onclick="addNewCamera(this)">Add</button>
@@ -360,12 +360,11 @@ window.addNewCamera = function(btnElem) {
     const parent = btnElem.closest('.cam-details');
     const id = parent.querySelector('#new-id').value;
     const ip = parent.querySelector('#new-ip').value;
-    const srtPort = parent.querySelector('#new-srt-port').value;
+    const rtsp = parent.querySelector('#new-rtsp').value;
 
-    if (id && ip && srtPort) {
-        const srtLink = `srt://${ip}:${srtPort}`;
+    if (id && ip && rtsp) {
         if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
-            window.controlWs.send(JSON.stringify({ type: 'setup', camId: id, camIp: ip, camSrt: srtLink }));
+            window.controlWs.send(JSON.stringify({ type: 'setup', camId: id, camIp: ip, camRtsp: rtsp }));
         }
     } else {
         alert("Please fill all fields");
@@ -374,12 +373,11 @@ window.addNewCamera = function(btnElem) {
 
 window.updateCamera = function(id) {
     const ip = document.getElementById(`edit-ip-${id}`).value;
-    const srtPort = document.getElementById(`edit-srt-port-${id}`).value;
+    const rtsp = document.getElementById(`edit-rtsp-${id}`).value;
 
-    if (ip && srtPort) {
-        const srtLink = `srt://${ip}:${srtPort}`;
+    if (ip && rtsp) {
         if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
-            window.controlWs.send(JSON.stringify({ type: 'setup', camId: id, camIp: ip, camSrt: srtLink }));
+            window.controlWs.send(JSON.stringify({ type: 'setup', camId: id, camIp: ip, camRtsp: rtsp }));
         }
     } else {
         alert("Please fill all fields");
@@ -464,12 +462,12 @@ loadConfigInput.addEventListener('change', (event) => {
                     setTimeout(() => {
                         Object.keys(config).forEach(id => {
                             const camData = config[id];
-                            if (camData && camData.ip && camData.srt) {
+                            if (camData && camData.ip && camData.rtsp) {
                                 window.controlWs.send(JSON.stringify({
                                     type: 'setup',
                                     camId: id,
                                     camIp: camData.ip,
-                                    camSrt: camData.srt
+                                    camRtsp: camData.rtsp
                                 }));
                             }
                         });

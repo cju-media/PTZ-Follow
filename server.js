@@ -17,26 +17,27 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Video stream websocket handler
 app.ws('/stream', (ws, req) => {
     const camId = req.query.id;
-    const srtQuery = req.query.srt;
+    const rtspQuery = req.query.rtsp;
 
-    // Resolve SRT link: try from state first (OSC setup), then query param
-    let srtLink = null;
-    if (camId && state.cameras[camId] && state.cameras[camId].srt) {
-        srtLink = state.cameras[camId].srt;
-    } else if (srtQuery) {
-        srtLink = srtQuery;
+    // Resolve RTSP link: try from state first (OSC setup), then query param
+    let rtspLink = null;
+    if (camId && state.cameras[camId] && state.cameras[camId].rtsp) {
+        rtspLink = state.cameras[camId].rtsp;
+    } else if (rtspQuery) {
+        rtspLink = rtspQuery;
     }
 
-    if (!srtLink) {
-        console.error("No SRT link provided or configured for the given ID.");
+    if (!rtspLink) {
+        console.error("No RTSP link provided or configured for the given ID.");
         ws.close();
         return;
     }
 
-    console.log(`Starting FFmpeg for stream: ${srtLink}`);
+    console.log(`Starting FFmpeg for stream: ${rtspLink}`);
 
-    const command = ffmpeg(srtLink)
+    const command = ffmpeg(rtspLink)
         .inputOptions([
+            '-rtsp_transport tcp',
             '-analyzeduration 100M',
             '-probesize 100M',
         ])
@@ -60,14 +61,14 @@ app.ws('/stream', (ws, req) => {
     });
 
     ws.on('close', () => {
-        console.log(`Closing FFmpeg stream for: ${srtLink}`);
+        console.log(`Closing FFmpeg stream for: ${rtspLink}`);
         command.kill();
     });
 });
 
 // Store global state
 const state = {
-    cameras: {}, // Format: { id: { ip, srt, trackingEnabled: boolean } }
+    cameras: {}, // Format: { id: { ip, rtsp, trackingEnabled: boolean } }
     viscaDevices: {} // Format: { id: Visca Camera instance }
 };
 
@@ -124,8 +125,8 @@ app.ws('/control', (ws, req) => {
             const data = JSON.parse(msg);
             if (data.type === 'setup') {
                 const trackingEnabled = state.cameras[data.camId] ? state.cameras[data.camId].trackingEnabled : false;
-                state.cameras[data.camId] = { ip: data.camIp, srt: data.camSrt, trackingEnabled };
-                console.log(`UI Setup updated for ID ${data.camId}: IP=${data.camIp}, SRT=${data.camSrt}`);
+                state.cameras[data.camId] = { ip: data.camIp, rtsp: data.camRtsp, trackingEnabled };
+                console.log(`UI Setup updated for ID ${data.camId}: IP=${data.camIp}, RTSP=${data.camRtsp}`);
                 initVisca(data.camId, data.camIp);
             } else if (data.type === 'ptz_correction') {
                 const trackingEnabled = state.cameras[data.camId] ? state.cameras[data.camId].trackingEnabled : false;
@@ -271,11 +272,10 @@ oscServer.on('message', (msg) => {
         if (args.length >= 3) {
             const id = args[0];
             const ip = args[1];
-            const port = args[2];
-            const srt = `srt://${ip}:${port}`;
+            const rtsp = args[2];
             const trackingEnabled = state.cameras[id] ? state.cameras[id].trackingEnabled : false;
-            state.cameras[id] = { ip, srt, trackingEnabled };
-            console.log(`Camera setup updated for ID ${id}: IP=${ip}, SRT=${srt}`);
+            state.cameras[id] = { ip, rtsp, trackingEnabled };
+            console.log(`Camera setup updated for ID ${id}: IP=${ip}, RTSP=${rtsp}`);
             initVisca(id, ip);
             // Broadcast state update
             wsInstance.getWss().clients.forEach(client => {
