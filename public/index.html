@@ -25,6 +25,11 @@
             margin-bottom: 20px;
         }
 
+        .header-actions {
+            display: flex;
+            gap: 10px;
+        }
+
         #camera-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
@@ -184,7 +189,12 @@
     <div class="container">
         <div class="header">
             <h1>PTZ Auto Tracker</h1>
-            <button id="open-modal-btn" class="btn btn-save">Edit Cameras</button>
+            <div class="header-actions">
+                <button id="save-config-btn" class="btn btn-save" style="background: #28a745;">Save Config</button>
+                <button id="load-config-btn" class="btn btn-save" style="background: #17a2b8;">Load Config</button>
+                <input type="file" id="load-config-input" accept=".json" style="display: none;">
+                <button id="open-modal-btn" class="btn btn-save">Edit Cameras</button>
+            </div>
         </div>
 
         <div id="camera-grid">

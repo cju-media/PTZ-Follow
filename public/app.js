@@ -416,3 +416,60 @@ function initControlWs() {
 }
 
 initControlWs();
+
+// Save and Load Config Logic
+document.getElementById('save-config-btn').addEventListener('click', () => {
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(serverCameras, null, 2));
+    const dlAnchorElem = document.createElement('a');
+    dlAnchorElem.setAttribute("href", dataStr);
+    dlAnchorElem.setAttribute("download", "ptz_tracker_config.json");
+    dlAnchorElem.click();
+});
+
+const loadConfigBtn = document.getElementById('load-config-btn');
+const loadConfigInput = document.getElementById('load-config-input');
+
+loadConfigBtn.addEventListener('click', () => {
+    loadConfigInput.click();
+});
+
+loadConfigInput.addEventListener('change', (event) => {
+    const file = event.target.files[0];
+    if (file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const config = JSON.parse(e.target.result);
+
+                if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
+                    // Remove existing cameras
+                    Object.keys(serverCameras).forEach(id => {
+                         window.controlWs.send(JSON.stringify({ type: 'remove_camera', camId: id }));
+                    });
+
+                    // Add new cameras from config
+                    setTimeout(() => {
+                        Object.keys(config).forEach(id => {
+                            const camData = config[id];
+                            if (camData && camData.ip && camData.rtmp) {
+                                window.controlWs.send(JSON.stringify({
+                                    type: 'setup',
+                                    camId: id,
+                                    camIp: camData.ip,
+                                    camRtmp: camData.rtmp
+                                }));
+                            }
+                        });
+                    }, 500); // Wait a moment for removes to process
+                } else {
+                    alert("Not connected to server.");
+                }
+            } catch (err) {
+                console.error("Error parsing config JSON", err);
+                alert("Invalid configuration file.");
+            }
+        };
+        reader.readAsText(file);
+        loadConfigInput.value = ''; // Reset input
+    }
+});
