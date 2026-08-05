@@ -4,12 +4,12 @@ const path = require('path');
 const { Server } = require('node-osc');
 const open = require('open');
 const ffmpeg = require('fluent-ffmpeg');
-const onvif = require('node-onvif');
+const { Camera } = require('visca-over-ip');
 
 const PORT = 9356;
 const OSC_PORT = 9357; // Listen on a different port for OSC
 const app = express();
-expressWs(app);
+const wsInstance = expressWs(app);
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -68,25 +68,19 @@ app.ws('/stream', (ws, req) => {
 const state = {
     trackingEnabled: false,
     cameras: {}, // Format: { id: { ip, rtmp } }
-    onvifDevices: {} // Format: { id: OnvifDevice instance }
+    viscaDevices: {} // Format: { id: Visca Camera instance }
 };
 
-// Function to initialize ONVIF device
-function initOnvif(camId, ip) {
-    if (state.onvifDevices[camId]) {
-        return; // Already initialized
+// Function to initialize VISCA device
+function initVisca(camId, ip) {
+    console.log(`Initializing VISCA device for ${camId} at ${ip}...`);
+    try {
+        const camera = new Camera(ip);
+        console.log(`VISCA initialized for ${camId}`);
+        state.viscaDevices[camId] = camera;
+    } catch (err) {
+        console.error(`VISCA init failed for ${camId}:`, err);
     }
-    console.log(`Initializing ONVIF device for ${camId} at ${ip}...`);
-    const device = new onvif.OnvifDevice({
-        xaddr: `http://${ip}/onvif/device_service`
-    });
-
-    device.init().then(() => {
-        console.log(`ONVIF initialized for ${camId}`);
-        state.onvifDevices[camId] = device;
-    }).catch(err => {
-        console.error(`ONVIF init failed for ${camId}:`, err);
-    });
 }
 
 // Control websocket handler for UI -> Server
@@ -104,12 +98,12 @@ app.ws('/control', (ws, req) => {
             if (data.type === 'setup') {
                 state.cameras[data.camId] = { ip: data.camIp, rtmp: data.camRtmp };
                 console.log(`UI Setup updated for ID ${data.camId}: IP=${data.camIp}, RTMP=${data.camRtmp}`);
-                initOnvif(data.camId, data.camIp);
+                initVisca(data.camId, data.camIp);
             } else if (data.type === 'ptz_correction') {
                 if (!state.trackingEnabled) return;
 
-                const device = state.onvifDevices[data.camId];
-                if (device) {
+                const camera = state.viscaDevices[data.camId];
+                if (camera) {
                     let pan = data.pan;
                     let tilt = data.tilt;
 
@@ -117,22 +111,34 @@ app.ws('/control', (ws, req) => {
                     if (Math.abs(tilt) < 0.1) tilt = 0;
 
                     if (pan !== 0 || tilt !== 0) {
-                        const profileToken = device.getCurrentProfile().token;
-                        device.services.ptz.continuousMove({
-                            ProfileToken: profileToken,
-                            Velocity: {
-                                PanTilt: { x: pan, y: tilt },
-                                Zoom: { x: 0 }
-                            }
+                        // VISCA speeds: Pan 0x01-0x18 (1-24), Tilt 0x01-0x14 (1-20)
+                        let panSpeed = Math.floor(Math.abs(pan) * 24);
+                        let tiltSpeed = Math.floor(Math.abs(tilt) * 20);
+
+                        // clamp
+                        if (panSpeed > 24) panSpeed = 24;
+                        if (panSpeed < 1 && pan !== 0) panSpeed = 1;
+                        if (tiltSpeed > 20) tiltSpeed = 20;
+                        if (tiltSpeed < 1 && tilt !== 0) tiltSpeed = 1;
+
+                        let panDir = pan > 0 ? 'right' : (pan < 0 ? 'left' : 'stop');
+                        let tiltDir = tilt > 0 ? 'up' : (tilt < 0 ? 'down' : 'stop');
+
+                        // In visca-over-ip, to do diagonal or single axis:
+                        camera.ptz({
+                            pan: panDir,
+                            tilt: tiltDir,
+                            panSpeed: panSpeed,
+                            tiltSpeed: tiltSpeed
                         }).catch(e => {
-                           console.error("PTZ ContinuousMove Error", e);
+                            console.error("PTZ Move Error", e);
                         });
                     } else {
-                        const profileToken = device.getCurrentProfile().token;
-                        device.services.ptz.stop({
-                            ProfileToken: profileToken,
-                            PanTilt: true,
-                            Zoom: true
+                        camera.ptz({
+                            pan: 'stop',
+                            tilt: 'stop',
+                            panSpeed: 1,
+                            tiltSpeed: 1
                         }).catch(e => {
                             console.error("PTZ Stop Error", e);
                         });
@@ -163,7 +169,7 @@ oscServer.on('message', (msg) => {
         state.trackingEnabled = args[0] === 1;
         console.log(`Tracking enabled via OSC: ${state.trackingEnabled}`);
         // Broadcast state update to all UI clients so they can start/stop OpenCV
-        expressWs.getWss().clients.forEach(client => {
+        wsInstance.getWss().clients.forEach(client => {
             if (client.readyState === 1) { // WebSocket.OPEN
                 client.send(JSON.stringify({
                     type: 'state',
@@ -181,9 +187,9 @@ oscServer.on('message', (msg) => {
             const rtmp = args[2];
             state.cameras[id] = { ip, rtmp };
             console.log(`Camera setup updated for ID ${id}: IP=${ip}, RTMP=${rtmp}`);
-            initOnvif(id, ip);
+            initVisca(id, ip);
             // Broadcast state update
-            expressWs.getWss().clients.forEach(client => {
+            wsInstance.getWss().clients.forEach(client => {
                 if (client.readyState === 1) {
                     client.send(JSON.stringify({
                         type: 'state',
