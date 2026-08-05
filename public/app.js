@@ -93,7 +93,7 @@ function initTracker() {
 
     tracker.init(src, rect);
     isTracking = true;
-    requestAnimationFrame(processVideo);
+    setTimeout(processVideo, 100);
 }
 
 function stopTracker() {
@@ -157,14 +157,25 @@ function processVideo() {
 
         } else {
             console.log("Tracking lost");
-            // Optionally stop tracking or keep trying
+            // Send a stop command if tracking is lost
+            if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
+                const camId = document.getElementById('cam-id').value;
+                if (camId) {
+                     window.controlWs.send(JSON.stringify({
+                         type: 'ptz_correction',
+                         camId: camId,
+                         pan: 0,
+                         tilt: 0
+                     }));
+                }
+            }
         }
     } catch (err) {
         console.error(err);
     }
 
     if (isTracking) {
-        requestAnimationFrame(processVideo);
+        setTimeout(processVideo, 100); // Process at ~10Hz
     }
 }
 
@@ -181,27 +192,34 @@ function initControlWs() {
                 if (data.type === 'state') {
                     // Update UI and tracker based on OSC state from server
 
-                    // 1. Toggle tracking based on OSC state
-                    const btn = document.getElementById('tracking-btn');
-                    if (data.trackingEnabled && !isTracking && typeof cv !== 'undefined' && cv.TrackerCSRT && currentRect) {
-                         initTracker();
-                         btn.textContent = 'Disable Tracking';
-                    } else if (!data.trackingEnabled && isTracking) {
-                         stopTracker();
-                         btn.textContent = 'Enable Tracking';
-                    }
-
-                    // 2. We can auto-fill and start video if cameras are setup via OSC
                     const camIdInput = document.getElementById('cam-id');
+                    const currentCamId = camIdInput.value;
+
+                    // 1. Auto-fill and start video if cameras are setup via OSC and nothing is playing
                     if (data.cameras && Object.keys(data.cameras).length > 0) {
                         const firstCamId = Object.keys(data.cameras)[0];
                         const camData = data.cameras[firstCamId];
 
-                        if (!player) {
+                        if (!player && !currentCamId) {
                              camIdInput.value = firstCamId;
                              document.getElementById('cam-ip').value = camData.ip;
                              document.getElementById('cam-rtmp').value = camData.rtmp;
                              startVideo(firstCamId, camData.rtmp);
+                        }
+                    }
+
+                    // 2. Toggle tracking based on server state for the current camera
+                    const activeCamId = camIdInput.value;
+                    if (activeCamId && data.cameras && data.cameras[activeCamId]) {
+                        const camTrackingEnabled = data.cameras[activeCamId].trackingEnabled;
+                        const btn = document.getElementById('tracking-btn');
+
+                        if (camTrackingEnabled && !isTracking && typeof cv !== 'undefined' && cv.TrackerCSRT && currentRect) {
+                             initTracker();
+                             btn.textContent = 'Disable Tracking';
+                        } else if (!camTrackingEnabled && isTracking) {
+                             stopTracker();
+                             btn.textContent = 'Enable Tracking';
                         }
                     }
                 }
@@ -233,21 +251,34 @@ document.getElementById('setup-btn').addEventListener('click', () => {
             window.controlWs.send(JSON.stringify({ type: 'setup', camId, camIp, camRtmp }));
         }
 
-        startVideo(camRtmp);
+        startVideo(camId, camRtmp);
     } else {
         alert("Please fill all fields");
     }
 });
 
 document.getElementById('tracking-btn').addEventListener('click', () => {
-    const btn = document.getElementById('tracking-btn');
+    const camId = document.getElementById('cam-id').value;
+    if (!camId) {
+        alert("Please set up a camera first.");
+        return;
+    }
+
     if (isTracking) {
+        // Stop tracking
+        if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
+             window.controlWs.send(JSON.stringify({ type: 'tracking_toggle', camId: camId, enabled: false }));
+        }
         stopTracker();
-        btn.textContent = 'Enable Tracking';
+        document.getElementById('tracking-btn').textContent = 'Enable Tracking';
     } else {
         if (typeof cv !== 'undefined' && cv.TrackerCSRT && currentRect) {
+            // Start tracking
+            if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
+                 window.controlWs.send(JSON.stringify({ type: 'tracking_toggle', camId: camId, enabled: true }));
+            }
             initTracker();
-            btn.textContent = 'Disable Tracking';
+            document.getElementById('tracking-btn').textContent = 'Disable Tracking';
         } else {
             alert('Please draw a bounding box first or wait for OpenCV to load.');
         }

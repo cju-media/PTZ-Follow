@@ -66,8 +66,7 @@ app.ws('/stream', (ws, req) => {
 
 // Store global state
 const state = {
-    trackingEnabled: false,
-    cameras: {}, // Format: { id: { ip, rtmp } }
+    cameras: {}, // Format: { id: { ip, rtmp, trackingEnabled: boolean } }
     viscaDevices: {} // Format: { id: Visca Camera instance }
 };
 
@@ -88,7 +87,6 @@ app.ws('/control', (ws, req) => {
     // When a control client connects, send the current tracking state and cameras
     ws.send(JSON.stringify({
         type: 'state',
-        trackingEnabled: state.trackingEnabled,
         cameras: state.cameras
     }));
 
@@ -96,11 +94,13 @@ app.ws('/control', (ws, req) => {
         try {
             const data = JSON.parse(msg);
             if (data.type === 'setup') {
-                state.cameras[data.camId] = { ip: data.camIp, rtmp: data.camRtmp };
+                const trackingEnabled = state.cameras[data.camId] ? state.cameras[data.camId].trackingEnabled : false;
+                state.cameras[data.camId] = { ip: data.camIp, rtmp: data.camRtmp, trackingEnabled };
                 console.log(`UI Setup updated for ID ${data.camId}: IP=${data.camIp}, RTMP=${data.camRtmp}`);
                 initVisca(data.camId, data.camIp);
             } else if (data.type === 'ptz_correction') {
-                if (!state.trackingEnabled) return;
+                const trackingEnabled = state.cameras[data.camId] ? state.cameras[data.camId].trackingEnabled : false;
+                if (!trackingEnabled) return;
 
                 const camera = state.viscaDevices[data.camId];
                 if (camera) {
@@ -144,6 +144,36 @@ app.ws('/control', (ws, req) => {
                         });
                     }
                 }
+            } else if (data.type === 'tracking_toggle') {
+                if (state.cameras[data.camId]) {
+                    state.cameras[data.camId].trackingEnabled = data.enabled;
+                    console.log(`Tracking toggled via UI for ${data.camId}: ${data.enabled}`);
+
+                    // Stop camera if tracking is disabled
+                    if (!data.enabled) {
+                        const camera = state.viscaDevices[data.camId];
+                        if (camera) {
+                            camera.ptz({
+                                pan: 'stop',
+                                tilt: 'stop',
+                                panSpeed: 1,
+                                tiltSpeed: 1
+                            }).catch(e => {
+                                console.error("PTZ Stop Error on Toggle", e);
+                            });
+                        }
+                    }
+
+                    // Broadcast state update
+                    wsInstance.getWss().clients.forEach(client => {
+                        if (client.readyState === 1) {
+                            client.send(JSON.stringify({
+                                type: 'state',
+                                cameras: state.cameras
+                            }));
+                        }
+                    });
+                }
             }
         } catch (err) {
             console.error("Control WS parse error", err);
@@ -166,18 +196,41 @@ oscServer.on('message', (msg) => {
     const args = msg.slice(1);
 
     if (address === '/tracking') {
-        state.trackingEnabled = args[0] === 1;
-        console.log(`Tracking enabled via OSC: ${state.trackingEnabled}`);
-        // Broadcast state update to all UI clients so they can start/stop OpenCV
-        wsInstance.getWss().clients.forEach(client => {
-            if (client.readyState === 1) { // WebSocket.OPEN
-                client.send(JSON.stringify({
-                    type: 'state',
-                    trackingEnabled: state.trackingEnabled,
-                    cameras: state.cameras
-                }));
+        if (args.length >= 2) {
+            const id = args[0];
+            const enabled = args[1] === 1;
+            if (!state.cameras[id]) {
+                state.cameras[id] = { trackingEnabled: enabled };
+            } else {
+                state.cameras[id].trackingEnabled = enabled;
             }
-        });
+            console.log(`Tracking enabled via OSC for ${id}: ${enabled}`);
+
+            // Stop camera if tracking is disabled
+            if (!enabled) {
+                const camera = state.viscaDevices[id];
+                if (camera) {
+                    camera.ptz({
+                        pan: 'stop',
+                        tilt: 'stop',
+                        panSpeed: 1,
+                        tiltSpeed: 1
+                    }).catch(e => {
+                        console.error("PTZ Stop Error on OSC Toggle", e);
+                    });
+                }
+            }
+
+            // Broadcast state update to all UI clients so they can start/stop OpenCV
+            wsInstance.getWss().clients.forEach(client => {
+                if (client.readyState === 1) { // WebSocket.OPEN
+                    client.send(JSON.stringify({
+                        type: 'state',
+                        cameras: state.cameras
+                    }));
+                }
+            });
+        }
     } else if (address === '/gui/open') {
         open(`http://localhost:${PORT}`);
     } else if (address === '/camera/setup') {
@@ -185,7 +238,8 @@ oscServer.on('message', (msg) => {
             const id = args[0];
             const ip = args[1];
             const rtmp = args[2];
-            state.cameras[id] = { ip, rtmp };
+            const trackingEnabled = state.cameras[id] ? state.cameras[id].trackingEnabled : false;
+            state.cameras[id] = { ip, rtmp, trackingEnabled };
             console.log(`Camera setup updated for ID ${id}: IP=${ip}, RTMP=${rtmp}`);
             initVisca(id, ip);
             // Broadcast state update
@@ -193,7 +247,6 @@ oscServer.on('message', (msg) => {
                 if (client.readyState === 1) {
                     client.send(JSON.stringify({
                         type: 'state',
-                        trackingEnabled: state.trackingEnabled,
                         cameras: state.cameras
                     }));
                 }
