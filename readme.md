@@ -29,4 +29,4 @@ The server listens for OSC messages on port **9357**.
 | :--- | :--- | :--- |
 | `/tracking` | `String` (id), `Integer` (1 or 0) | Toggles tracking on (1) or off (0) for a specific camera ID. <br><br> *Example:* `/tracking "cam1" 1` |
 | `/gui/open` | None | Opens the Web GUI (`http://localhost:9356`) in the default web browser of the machine running the server. |
-| `/camera/setup` | `String` (id), `String` (ip), `String` (srt) | Configures a camera. <br> - **id**: A unique string ID for the camera. <br> - **ip**: The VISCA IP address of the camera. <br> - **srt**: The SRT stream URL of the camera. <br><br> *Example:* `/camera/setup "cam1" "192.168.1.100" "srt://server/live/stream"` |
+| `/camera/setup` | `String` (id), `String` (ip), `Integer/String` (port) | Configures a camera. <br> - **id**: A unique string ID for the camera. <br> - **ip**: The VISCA IP address of the camera. <br> - **port**: The SRT stream port of the camera. <br><br> *Example:* `/camera/setup "cam1" "192.168.1.100" 5000` |

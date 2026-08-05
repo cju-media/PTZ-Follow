@@ -271,7 +271,8 @@ oscServer.on('message', (msg) => {
         if (args.length >= 3) {
             const id = args[0];
             const ip = args[1];
-            const srt = args[2];
+            const port = args[2];
+            const srt = `srt://${ip}:${port}`;
             const trackingEnabled = state.cameras[id] ? state.cameras[id].trackingEnabled : false;
             state.cameras[id] = { ip, srt, trackingEnabled };
             console.log(`Camera setup updated for ID ${id}: IP=${ip}, SRT=${srt}`);
