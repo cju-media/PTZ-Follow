@@ -4,7 +4,8 @@ const path = require('path');
 const { Server } = require('node-osc');
 const open = require('open');
 const ffmpeg = require('fluent-ffmpeg');
-const { ViscaCamera } = require('visca-over-ip');
+const { ViscaCamera, ViscaCommand } = require('visca-over-ip');
+const { Bonjour } = require('bonjour-service');
 
 const PORT = 9356;
 const OSC_PORT = 9357; // Listen on a different port for OSC
@@ -16,25 +17,25 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Video stream websocket handler
 app.ws('/stream', (ws, req) => {
     const camId = req.query.id;
-    const rtmpQuery = req.query.rtmp;
+    const srtQuery = req.query.srt;
 
-    // Resolve RTMP link: try from state first (OSC setup), then query param
-    let rtmpLink = null;
-    if (camId && state.cameras[camId] && state.cameras[camId].rtmp) {
-        rtmpLink = state.cameras[camId].rtmp;
-    } else if (rtmpQuery) {
-        rtmpLink = rtmpQuery;
+    // Resolve SRT link: try from state first (OSC setup), then query param
+    let srtLink = null;
+    if (camId && state.cameras[camId] && state.cameras[camId].srt) {
+        srtLink = state.cameras[camId].srt;
+    } else if (srtQuery) {
+        srtLink = srtQuery;
     }
 
-    if (!rtmpLink) {
-        console.error("No RTMP link provided or configured for the given ID.");
+    if (!srtLink) {
+        console.error("No SRT link provided or configured for the given ID.");
         ws.close();
         return;
     }
 
-    console.log(`Starting FFmpeg for stream: ${rtmpLink}`);
+    console.log(`Starting FFmpeg for stream: ${srtLink}`);
 
-    const command = ffmpeg(rtmpLink)
+    const command = ffmpeg(srtLink)
         .inputOptions([
             '-analyzeduration 100M',
             '-probesize 100M',
@@ -59,16 +60,43 @@ app.ws('/stream', (ws, req) => {
     });
 
     ws.on('close', () => {
-        console.log(`Closing FFmpeg stream for: ${rtmpLink}`);
+        console.log(`Closing FFmpeg stream for: ${srtLink}`);
         command.kill();
     });
 });
 
 // Store global state
 const state = {
-    cameras: {}, // Format: { id: { ip, rtmp, trackingEnabled: boolean } }
+    cameras: {}, // Format: { id: { ip, srt, trackingEnabled: boolean } }
     viscaDevices: {} // Format: { id: Visca Camera instance }
 };
+
+// Bonjour Discovery
+const discoveredIps = new Set();
+const bonjour = new Bonjour();
+const browser = bonjour.find();
+
+browser.on('up', (service) => {
+    if (service.addresses && service.addresses.length > 0) {
+        // Collect IPv4 addresses
+        const ipv4 = service.addresses.filter(addr => addr.includes('.'));
+        ipv4.forEach(addr => discoveredIps.add(addr));
+    }
+});
+
+setInterval(() => {
+    const ips = Array.from(discoveredIps);
+    if (ips.length > 0) {
+        wsInstance.getWss().clients.forEach(client => {
+            if (client.readyState === 1) { // WebSocket.OPEN
+                client.send(JSON.stringify({
+                    type: 'discovered_cameras',
+                    ips: ips
+                }));
+            }
+        });
+    }
+}, 5000); // Broadcast discovered IPs every 5 seconds
 
 // Function to initialize VISCA device
 function initVisca(camId, ip) {
@@ -96,8 +124,8 @@ app.ws('/control', (ws, req) => {
             const data = JSON.parse(msg);
             if (data.type === 'setup') {
                 const trackingEnabled = state.cameras[data.camId] ? state.cameras[data.camId].trackingEnabled : false;
-                state.cameras[data.camId] = { ip: data.camIp, rtmp: data.camRtmp, trackingEnabled };
-                console.log(`UI Setup updated for ID ${data.camId}: IP=${data.camIp}, RTMP=${data.camRtmp}`);
+                state.cameras[data.camId] = { ip: data.camIp, srt: data.camSrt, trackingEnabled };
+                console.log(`UI Setup updated for ID ${data.camId}: IP=${data.camIp}, SRT=${data.camSrt}`);
                 initVisca(data.camId, data.camIp);
             } else if (data.type === 'ptz_correction') {
                 const trackingEnabled = state.cameras[data.camId] ? state.cameras[data.camId].trackingEnabled : false;
@@ -125,22 +153,14 @@ app.ws('/control', (ws, req) => {
                         let panDir = pan > 0 ? 'right' : (pan < 0 ? 'left' : 'stop');
                         let tiltDir = tilt > 0 ? 'up' : (tilt < 0 ? 'down' : 'stop');
 
-                        // In visca-over-ip, to do diagonal or single axis:
-                        camera.ptz({
-                            pan: panDir,
-                            tilt: tiltDir,
-                            panSpeed: panSpeed,
-                            tiltSpeed: tiltSpeed
-                        }).catch(e => {
+                        let xSpeed = panDir === 'right' ? panSpeed : (panDir === 'left' ? -panSpeed : 0);
+                        let ySpeed = tiltDir === 'up' ? tiltSpeed : (tiltDir === 'down' ? -tiltSpeed : 0);
+
+                        camera.sendCommand(ViscaCommand.cameraPanTilt(xSpeed, ySpeed)).catch(e => {
                             console.error("PTZ Move Error", e);
                         });
                     } else {
-                        camera.ptz({
-                            pan: 'stop',
-                            tilt: 'stop',
-                            panSpeed: 1,
-                            tiltSpeed: 1
-                        }).catch(e => {
+                        camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03)).catch(e => {
                             console.error("PTZ Stop Error", e);
                         });
                     }
@@ -154,12 +174,7 @@ app.ws('/control', (ws, req) => {
                     if (!data.enabled) {
                         const camera = state.viscaDevices[data.camId];
                         if (camera) {
-                            camera.ptz({
-                                pan: 'stop',
-                                tilt: 'stop',
-                                panSpeed: 1,
-                                tiltSpeed: 1
-                            }).catch(e => {
+                            camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03)).catch(e => {
                                 console.error("PTZ Stop Error on Toggle", e);
                             });
                         }
@@ -182,7 +197,7 @@ app.ws('/control', (ws, req) => {
                     // Stop camera if it was tracking
                     const camera = state.viscaDevices[data.camId];
                     if (camera && state.cameras[data.camId].trackingEnabled) {
-                        camera.ptz({ pan: 'stop', tilt: 'stop', panSpeed: 1, tiltSpeed: 1 }).catch(() => {});
+                        camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03)).catch(() => {});
                     }
 
                     delete state.cameras[data.camId];
@@ -234,12 +249,7 @@ oscServer.on('message', (msg) => {
             if (!enabled) {
                 const camera = state.viscaDevices[id];
                 if (camera) {
-                    camera.ptz({
-                        pan: 'stop',
-                        tilt: 'stop',
-                        panSpeed: 1,
-                        tiltSpeed: 1
-                    }).catch(e => {
+                    camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03)).catch(e => {
                         console.error("PTZ Stop Error on OSC Toggle", e);
                     });
                 }
@@ -261,10 +271,10 @@ oscServer.on('message', (msg) => {
         if (args.length >= 3) {
             const id = args[0];
             const ip = args[1];
-            const rtmp = args[2];
+            const srt = args[2];
             const trackingEnabled = state.cameras[id] ? state.cameras[id].trackingEnabled : false;
-            state.cameras[id] = { ip, rtmp, trackingEnabled };
-            console.log(`Camera setup updated for ID ${id}: IP=${ip}, RTMP=${rtmp}`);
+            state.cameras[id] = { ip, srt, trackingEnabled };
+            console.log(`Camera setup updated for ID ${id}: IP=${ip}, SRT=${srt}`);
             initVisca(id, ip);
             // Broadcast state update
             wsInstance.getWss().clients.forEach(client => {
