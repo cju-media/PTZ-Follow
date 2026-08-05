@@ -4,7 +4,8 @@ const path = require('path');
 const { Server } = require('node-osc');
 const open = require('open');
 const ffmpeg = require('fluent-ffmpeg');
-const { ViscaCamera } = require('visca-over-ip');
+const { ViscaCamera, ViscaCommand } = require('visca-over-ip');
+const { Bonjour } = require('bonjour-service');
 
 const PORT = 9356;
 const OSC_PORT = 9357; // Listen on a different port for OSC
@@ -70,6 +71,33 @@ const state = {
     viscaDevices: {} // Format: { id: Visca Camera instance }
 };
 
+// Bonjour Discovery
+const discoveredIps = new Set();
+const bonjour = new Bonjour();
+const browser = bonjour.find();
+
+browser.on('up', (service) => {
+    if (service.addresses && service.addresses.length > 0) {
+        // Collect IPv4 addresses
+        const ipv4 = service.addresses.filter(addr => addr.includes('.'));
+        ipv4.forEach(addr => discoveredIps.add(addr));
+    }
+});
+
+setInterval(() => {
+    const ips = Array.from(discoveredIps);
+    if (ips.length > 0) {
+        wsInstance.getWss().clients.forEach(client => {
+            if (client.readyState === 1) { // WebSocket.OPEN
+                client.send(JSON.stringify({
+                    type: 'discovered_cameras',
+                    ips: ips
+                }));
+            }
+        });
+    }
+}, 5000); // Broadcast discovered IPs every 5 seconds
+
 // Function to initialize VISCA device
 function initVisca(camId, ip) {
     console.log(`Initializing VISCA device for ${camId} at ${ip}...`);
@@ -125,22 +153,14 @@ app.ws('/control', (ws, req) => {
                         let panDir = pan > 0 ? 'right' : (pan < 0 ? 'left' : 'stop');
                         let tiltDir = tilt > 0 ? 'up' : (tilt < 0 ? 'down' : 'stop');
 
-                        // In visca-over-ip, to do diagonal or single axis:
-                        camera.ptz({
-                            pan: panDir,
-                            tilt: tiltDir,
-                            panSpeed: panSpeed,
-                            tiltSpeed: tiltSpeed
-                        }).catch(e => {
+                        let xSpeed = panDir === 'right' ? panSpeed : (panDir === 'left' ? -panSpeed : 0);
+                        let ySpeed = tiltDir === 'up' ? tiltSpeed : (tiltDir === 'down' ? -tiltSpeed : 0);
+
+                        camera.sendCommand(ViscaCommand.cameraPanTilt(xSpeed, ySpeed)).catch(e => {
                             console.error("PTZ Move Error", e);
                         });
                     } else {
-                        camera.ptz({
-                            pan: 'stop',
-                            tilt: 'stop',
-                            panSpeed: 1,
-                            tiltSpeed: 1
-                        }).catch(e => {
+                        camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 3, 3)).catch(e => {
                             console.error("PTZ Stop Error", e);
                         });
                     }
@@ -154,12 +174,7 @@ app.ws('/control', (ws, req) => {
                     if (!data.enabled) {
                         const camera = state.viscaDevices[data.camId];
                         if (camera) {
-                            camera.ptz({
-                                pan: 'stop',
-                                tilt: 'stop',
-                                panSpeed: 1,
-                                tiltSpeed: 1
-                            }).catch(e => {
+                            camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 3, 3)).catch(e => {
                                 console.error("PTZ Stop Error on Toggle", e);
                             });
                         }
@@ -182,7 +197,7 @@ app.ws('/control', (ws, req) => {
                     // Stop camera if it was tracking
                     const camera = state.viscaDevices[data.camId];
                     if (camera && state.cameras[data.camId].trackingEnabled) {
-                        camera.ptz({ pan: 'stop', tilt: 'stop', panSpeed: 1, tiltSpeed: 1 }).catch(() => {});
+                        camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 3, 3)).catch(() => {});
                     }
 
                     delete state.cameras[data.camId];
@@ -234,12 +249,7 @@ oscServer.on('message', (msg) => {
             if (!enabled) {
                 const camera = state.viscaDevices[id];
                 if (camera) {
-                    camera.ptz({
-                        pan: 'stop',
-                        tilt: 'stop',
-                        panSpeed: 1,
-                        tiltSpeed: 1
-                    }).catch(e => {
+                    camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 3, 3)).catch(e => {
                         console.error("PTZ Stop Error on OSC Toggle", e);
                     });
                 }

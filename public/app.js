@@ -48,7 +48,8 @@ class CameraTracker {
         this.player = new JSMpeg.Player(streamUrl, {
             canvas: this.videoCanvas,
             autoplay: true,
-            audio: false
+            audio: false,
+            disableGl: true
         });
     }
 
@@ -341,7 +342,7 @@ addCamBtn.onclick = function() {
             </div>
             <div class="form-group">
                 <label>VISCA IP:</label>
-                <input type="text" id="new-ip" placeholder="192.168.1.100">
+                <input type="text" id="new-ip" list="discovered-ips" placeholder="192.168.1.100">
             </div>
             <div class="form-group">
                 <label>RTMP Link:</label>
@@ -402,6 +403,16 @@ function initControlWs() {
                     if (modal.style.display === "block") {
                         // Re-render modal if open to show changes
                         renderCameraList();
+                    }
+                } else if (data.type === 'discovered_cameras') {
+                    const datalist = document.getElementById('discovered-ips');
+                    if (datalist) {
+                        datalist.innerHTML = ''; // clear old
+                        data.ips.forEach(ip => {
+                            const opt = document.createElement('option');
+                            opt.value = ip;
+                            datalist.appendChild(opt);
+                        });
                     }
                 }
             } catch (err) {
