@@ -128,7 +128,7 @@ function startPythonTracker(camId, rtsp, rect) {
         pythonPath: 'python3',
         pythonOptions: ['-u'], // get print results in real-time
         scriptPath: __dirname,
-        env: { ...process.env, PYTHONPATH: '/usr/lib/python3/dist-packages' },
+
         args: [rtsp, JSON.stringify(rect)]
     };
 
