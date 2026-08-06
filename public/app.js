@@ -136,7 +136,7 @@ class CameraTracker {
 
     stopTracker() {
         this.isTracking = false;
-        this.currentRect = null;
+
         this.drawOverlay();
     }
 
