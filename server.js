@@ -4,6 +4,7 @@ const path = require('path');
 const { Server } = require('node-osc');
 const open = require('open');
 const ffmpeg = require('fluent-ffmpeg');
+const { PythonShell } = require('python-shell');
 const { ViscaCamera, ViscaCommand } = require('visca-over-ip');
 const { Bonjour } = require('bonjour-service');
 const fs = require('fs');
@@ -161,13 +162,6 @@ function initVisca(camId, ip) {
     }
 }
 
-// Control websocket handler for UI -> Server
-app.ws('/control', (ws, req) => {
-    // When a control client connects, send the current tracking state and cameras
-    ws.send(JSON.stringify({
-        type: 'state',
-        cameras: state.cameras
-    }));
 
     ws.on('message', (msg) => {
         try {
@@ -182,8 +176,31 @@ app.ws('/control', (ws, req) => {
                 const trackingEnabled = state.cameras[data.camId] ? state.cameras[data.camId].trackingEnabled : false;
                 if (!trackingEnabled) return;
 
-                const camera = state.viscaDevices[data.camId];
-                if (camera) {
+function startPythonTracker(camId, rtsp, rect) {
+    if (activeTrackers[camId]) {
+        activeTrackers[camId].send(JSON.stringify({ type: 'update_rect', rect }));
+        return;
+    }
+    console.log(`Starting python tracker for ${camId} on ${rtsp}`);
+    const options = {
+        mode: 'text',
+        pythonPath: 'python3',
+        pythonOptions: ['-u'], // get print results in real-time
+        scriptPath: __dirname,
+        env: { ...process.env, PYTHONPATH: '/usr/lib/python3/dist-packages' },
+        args: [rtsp, JSON.stringify(rect)]
+    };
+
+    const pyshell = new PythonShell('tracker.py', options);
+    activeTrackers[camId] = pyshell;
+
+    pyshell.on('message', function (message) {
+        try {
+            const data = JSON.parse(message);
+            if (data.type === 'tracking') {
+                // Send VISCA commands
+                const camera = state.viscaDevices[camId];
+                if (camera && state.cameras[camId] && state.cameras[camId].trackingEnabled) {
                     let pan = data.pan;
                     let tilt = data.tilt;
 
@@ -191,11 +208,9 @@ app.ws('/control', (ws, req) => {
                     if (Math.abs(tilt) < 0.1) tilt = 0;
 
                     if (pan !== 0 || tilt !== 0) {
-                        // VISCA speeds: Pan 0x01-0x18 (1-24), Tilt 0x01-0x14 (1-20)
                         let panSpeed = Math.floor(Math.abs(pan) * 24);
                         let tiltSpeed = Math.floor(Math.abs(tilt) * 20);
 
-                        // clamp
                         if (panSpeed > 24) panSpeed = 24;
                         if (panSpeed < 1 && pan !== 0) panSpeed = 1;
                         if (tiltSpeed > 20) tiltSpeed = 20;
@@ -216,13 +231,70 @@ app.ws('/control', (ws, req) => {
                         });
                     }
                 }
+
+                // Broadcast rect back to UI to draw it
+                wsInstance.getWss().clients.forEach(client => {
+                    if (client.readyState === 1) {
+                        client.send(JSON.stringify({
+                            type: 'tracking_update',
+                            camId: camId,
+                            rect: data.rect
+                        }));
+                    }
+                });
+            } else if (data.type === 'lost') {
+                console.log(`Tracking lost for ${camId}`);
+                const camera = state.viscaDevices[camId];
+                if (camera && state.cameras[camId] && state.cameras[camId].trackingEnabled) {
+                    camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03)).catch(e => {});
+                }
+            } else if (data.type === 'error') {
+                console.error(`Tracker error for ${camId}:`, data.message);
+            }
+        } catch (e) {
+            console.error("Error parsing tracker output:", e, message);
+        }
+    });
+
+    pyshell.end(function (err, code, signal) {
+        if (err) console.error(`Python shell error for ${camId}:`, err);
+        console.log(`Python tracker stopped for ${camId}`);
+        delete activeTrackers[camId];
+    });
+}
+
+function stopPythonTracker(camId) {
+    if (activeTrackers[camId]) {
+        activeTrackers[camId].send(JSON.stringify({ type: 'stop' }));
+        // It will delete itself on exit
+    }
+}
+
+// Control websocket handler for UI -> Server
+app.ws('/control', (ws, req) => {
+    // When a control client connects, send the current tracking state and cameras
+    ws.send(JSON.stringify({
+        type: 'state',
+        cameras: state.cameras
+    }));
+
+    ws.on('message', (msg) => {
+        try {
+            const data = JSON.parse(msg);
+            if (data.type === 'setup') {
+                const trackingEnabled = state.cameras[data.camId] ? state.cameras[data.camId].trackingEnabled : false;
+                state.cameras[data.camId] = { ip: data.camIp, rtsp: data.camRtsp, trackingEnabled };
+                console.log(`UI Setup updated for ID ${data.camId}: IP=${data.camIp}, RTSP=${data.camRtsp}`);
+                initVisca(data.camId, data.camIp);
             } else if (data.type === 'tracking_toggle') {
                 if (state.cameras[data.camId]) {
                     state.cameras[data.camId].trackingEnabled = data.enabled;
                     console.log(`Tracking toggled via UI for ${data.camId}: ${data.enabled}`);
 
-                    // Stop camera if tracking is disabled
-                    if (!data.enabled) {
+                    if (data.enabled && data.rect) {
+                        startPythonTracker(data.camId, state.cameras[data.camId].rtsp, data.rect);
+                    } else if (!data.enabled) {
+                        stopPythonTracker(data.camId);
                         const camera = state.viscaDevices[data.camId];
                         if (camera) {
                             camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03)).catch(e => {
@@ -241,6 +313,7 @@ app.ws('/control', (ws, req) => {
                         }
                     });
                 }
+
             } else if (data.type === 'remove_camera') {
                 if (state.cameras[data.camId]) {
                     console.log(`Removing camera ${data.camId}`);
@@ -253,6 +326,7 @@ app.ws('/control', (ws, req) => {
 
                     delete state.cameras[data.camId];
                     delete state.viscaDevices[data.camId];
+                    stopPythonTracker(data.camId);
 
                     // Broadcast state update
                     wsInstance.getWss().clients.forEach(client => {
@@ -298,6 +372,7 @@ oscServer.on('message', (msg) => {
 
             // Stop camera if tracking is disabled
             if (!enabled) {
+                stopPythonTracker(id);
                 const camera = state.viscaDevices[id];
                 if (camera) {
                     camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03)).catch(e => {
