@@ -237,12 +237,8 @@ function renderCameraList() {
             </div>
             <div class="cam-details">
                 <div class="form-group">
-                    <label>VISCA IP:</label>
+                    <label>Camera IP:</label>
                     <input type="text" id="edit-ip-${id}" value="${cam.ip}">
-                </div>
-                <div class="form-group">
-                    <label>RTSP Link:</label>
-                    <input type="text" id="edit-rtsp-${id}" value="${cam.rtsp}">
                 </div>
                 <div class="modal-actions">
                     <button class="btn btn-remove" onclick="removeCamera('${id}')">Remove</button>
@@ -270,12 +266,8 @@ addCamBtn.onclick = function() {
                 <input type="text" id="new-id" value="${newId}">
             </div>
             <div class="form-group">
-                <label>VISCA IP:</label>
+                <label>Camera IP:</label>
                 <input type="text" id="new-ip" list="discovered-ips" placeholder="192.168.1.100">
-            </div>
-            <div class="form-group">
-                <label>RTSP Link:</label>
-                <input type="text" id="new-rtsp" placeholder="rtsp://192.168.1.100:554/live/av0">
             </div>
             <div class="modal-actions">
                 <button class="btn btn-save" onclick="addNewCamera(this)">Add</button>
@@ -289,9 +281,9 @@ window.addNewCamera = function(btnElem) {
     const parent = btnElem.closest('.cam-details');
     const id = parent.querySelector('#new-id').value;
     const ip = parent.querySelector('#new-ip').value;
-    const rtsp = parent.querySelector('#new-rtsp').value;
 
-    if (id && ip && rtsp) {
+    if (id && ip) {
+        const rtsp = `rtsp://${ip}:554/live/av0`;
         if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
             window.controlWs.send(JSON.stringify({ type: 'setup', camId: id, camIp: ip, camRtsp: rtsp }));
         }
@@ -302,9 +294,9 @@ window.addNewCamera = function(btnElem) {
 
 window.updateCamera = function(id) {
     const ip = document.getElementById(`edit-ip-${id}`).value;
-    const rtsp = document.getElementById(`edit-rtsp-${id}`).value;
 
-    if (ip && rtsp) {
+    if (ip) {
+        const rtsp = `rtsp://${ip}:554/live/av0`;
         if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
             window.controlWs.send(JSON.stringify({ type: 'setup', camId: id, camIp: ip, camRtsp: rtsp }));
         }
