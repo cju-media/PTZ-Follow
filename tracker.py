@@ -70,9 +70,21 @@ def main():
                 sys.stdout.flush()
                 sys.exit(1)
             rect = tracker_state['rect']
-            # Convert rect dict to tuple (x, y, w, h)
-            bbox = (rect['x'], rect['y'], rect['width'], rect['height'])
-            tracker.init(frame, bbox)
+
+            # The OpenCV Tracking API in some versions requires explicitly passing a list or tuple of ints.
+            # To be safe across versions, a tuple of ints is usually the best approach.
+            bbox = (int(rect['x']), int(rect['y']), int(rect['width']), int(rect['height']))
+
+            try:
+                tracker.init(frame, bbox)
+            except Exception as e:
+                print(json.dumps({'type': 'error', 'message': f'Tracker init error: {str(e)}'}))
+                sys.stdout.flush()
+                # Instead of exiting on bad rect, just wait for a new one.
+                tracker_state['needs_init'] = False
+                tracker = None
+                continue
+
             tracker_state['needs_init'] = False
 
         if tracker is not None:
