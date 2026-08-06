@@ -100,7 +100,7 @@ class CameraTracker {
                 this.trackBtn.addEventListener('click', () => {
             if (this.isTracking) {
                 if (window.controlWs && window.controlWs.readyState === WebSocket.OPEN) {
-                     window.controlWs.send(JSON.stringify({ type: 'tracking_toggle', camId: this.camId, enabled: false }));
+                     window.controlWs.send(JSON.stringify({ type: 'tracking_toggle', camId: this.camId, enabled: true }));
                 }
                 this.stopTracker();
                 this.trackBtn.textContent = 'Enable Tracking';
@@ -111,7 +111,7 @@ class CameraTracker {
                          window.controlWs.send(JSON.stringify({
                              type: 'tracking_toggle',
                              camId: this.camId,
-                             enabled: true,
+                             enabled: false,
                              rect: this.currentRect
                          }));
                     }
