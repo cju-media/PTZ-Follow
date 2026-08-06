@@ -212,13 +212,9 @@ function startPythonTracker(camId, rtsp, rect) {
                         let xSpeed = panDir === 'right' ? panSpeed : (panDir === 'left' ? -panSpeed : 0);
                         let ySpeed = tiltDir === 'up' ? tiltSpeed : (tiltDir === 'down' ? -tiltSpeed : 0);
 
-                        camera.sendCommand(ViscaCommand.cameraPanTilt(xSpeed, ySpeed)).catch(e => {
-                            console.error("PTZ Move Error", e);
-                        });
+                        camera.sendCommand(ViscaCommand.cameraPanTilt(xSpeed, ySpeed));
                     } else {
-                        camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03)).catch(e => {
-                            console.error("PTZ Stop Error", e);
-                        });
+                        camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03));
                     }
                 }
 
@@ -236,7 +232,7 @@ function startPythonTracker(camId, rtsp, rect) {
                 console.log(`Tracking lost for ${camId}`);
                 const camera = state.viscaDevices[camId];
                 if (camera && state.cameras[camId] && state.cameras[camId].trackingEnabled) {
-                    camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03)).catch(e => {});
+                    camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03));
                 }
             } else if (data.type === 'error') {
                 console.error(`Tracker error for ${camId}:`, data.message);
@@ -291,9 +287,7 @@ app.ws('/control', (ws, req) => {
                         stopPythonTracker(data.camId);
                         const camera = state.viscaDevices[data.camId];
                         if (camera) {
-                            camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03)).catch(e => {
-                                console.error("PTZ Stop Error on Toggle", e);
-                            });
+                            camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03));
                         }
                     }
 
@@ -315,7 +309,7 @@ app.ws('/control', (ws, req) => {
                     // Stop camera if it was tracking
                     const camera = state.viscaDevices[data.camId];
                     if (camera && state.cameras[data.camId].trackingEnabled) {
-                        camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03)).catch(() => {});
+                        camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03));
                     }
 
                     delete state.cameras[data.camId];
@@ -369,9 +363,7 @@ oscServer.on('message', (msg) => {
                 stopPythonTracker(id);
                 const camera = state.viscaDevices[id];
                 if (camera) {
-                    camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03)).catch(e => {
-                        console.error("PTZ Stop Error on OSC Toggle", e);
-                    });
+                    camera.sendCommand(ViscaCommand.cameraPanTilt(0, 0, 0x03, 0x03));
                 }
             }
 
