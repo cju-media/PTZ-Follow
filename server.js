@@ -190,7 +190,7 @@ function startPythonTracker(camId, rtsp, rect) {
             if (data.type === 'tracking') {
                 // Send VISCA commands
                 const camera = state.viscaDevices[camId];
-                if (camera && state.cameras[camId] && state.cameras[camId].trackingEnabled) {
+                if (camera) {
                     let pan = data.pan;
                     let tilt = data.tilt;
 
@@ -255,8 +255,12 @@ function startPythonTracker(camId, rtsp, rect) {
 
 function stopPythonTracker(camId) {
     if (activeTrackers[camId]) {
-        activeTrackers[camId].send(JSON.stringify({ type: 'stop' }));
-        // It will delete itself on exit
+        try {
+            activeTrackers[camId].kill();
+        } catch (e) {
+            console.error("Error killing python shell:", e);
+        }
+        delete activeTrackers[camId];
     }
 }
 
