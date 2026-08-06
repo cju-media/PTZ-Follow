@@ -1,8 +1,14 @@
 import sys
 import json
-import cv2
 import threading
 import time
+
+try:
+    import cv2
+except ImportError:
+    print(json.dumps({'type': 'error', 'message': 'Cannot import cv2. Please install opencv-contrib-python.'}))
+    sys.stdout.flush()
+    sys.exit(1)
 
 def process_stdin(tracker_state):
     for line in sys.stdin:
@@ -57,7 +63,12 @@ def main():
             continue
 
         if tracker_state['needs_init']:
-            tracker = cv2.TrackerCSRT_create()
+            try:
+                tracker = cv2.TrackerCSRT_create()
+            except AttributeError:
+                print(json.dumps({'type': 'error', 'message': 'cv2.TrackerCSRT_create not found. Ensure you installed opencv-contrib-python, not just opencv-python.'}))
+                sys.stdout.flush()
+                sys.exit(1)
             rect = tracker_state['rect']
             # Convert rect dict to tuple (x, y, w, h)
             bbox = (rect['x'], rect['y'], rect['width'], rect['height'])
