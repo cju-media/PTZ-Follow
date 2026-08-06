@@ -7,6 +7,7 @@ const ffmpeg = require('fluent-ffmpeg');
 const { PythonShell } = require('python-shell');
 const { ViscaCamera, ViscaCommand } = require('visca-over-ip');
 const { Bonjour } = require('bonjour-service');
+const fs = require('fs');
 
 const PORT = 9356;
 const OSC_PORT = 9357; // Listen on a different port for OSC
@@ -73,6 +74,54 @@ const state = {
     viscaDevices: {} // Format: { id: Visca Camera instance }
 };
 
+// Persistent Configuration
+let configPath = 'config.json';
+try {
+    if (fs.existsSync('.config_path')) {
+        configPath = fs.readFileSync('.config_path', 'utf8').trim();
+    }
+} catch (e) {
+    console.error("Error reading .config_path", e);
+}
+
+function loadConfig() {
+    try {
+        if (fs.existsSync(configPath)) {
+            const data = fs.readFileSync(configPath, 'utf8');
+            state.cameras = JSON.parse(data);
+            console.log(`Loaded configuration from ${configPath}`);
+
+            // Re-initialize cameras
+            Object.keys(state.cameras).forEach(id => {
+                initVisca(id, state.cameras[id].ip);
+                // Assume tracking is off on startup for safety
+                state.cameras[id].trackingEnabled = false;
+            });
+        }
+    } catch (e) {
+        console.error("Error loading config", e);
+    }
+}
+
+function saveConfig() {
+    try {
+        // Only save ip and rtsp, don't persist tracking state
+        const configToSave = {};
+        Object.keys(state.cameras).forEach(id => {
+            configToSave[id] = {
+                ip: state.cameras[id].ip,
+                rtsp: state.cameras[id].rtsp
+            };
+        });
+        fs.writeFileSync(configPath, JSON.stringify(configToSave, null, 2));
+    } catch (e) {
+        console.error("Error saving config", e);
+    }
+}
+
+// Load config on startup
+loadConfig();
+
 // Bonjour Discovery
 const discoveredIps = new Set();
 const bonjour = new Bonjour();
@@ -114,8 +163,7 @@ function initVisca(camId, ip) {
 }
 
 
-// Track active PythonShell processes
-const activeTrackers = {};
+
 
 function startPythonTracker(camId, rtsp, rect) {
     if (activeTrackers[camId]) {
@@ -335,14 +383,15 @@ oscServer.on('message', (msg) => {
     } else if (address === '/gui/open') {
         open(`http://localhost:${PORT}`);
     } else if (address === '/camera/setup') {
-        if (args.length >= 3) {
+        if (args.length >= 2) {
             const id = args[0];
             const ip = args[1];
-            const rtsp = args[2];
+            const rtsp = `rtsp://${ip}:554/live/av0`;
             const trackingEnabled = state.cameras[id] ? state.cameras[id].trackingEnabled : false;
             state.cameras[id] = { ip, rtsp, trackingEnabled };
             console.log(`Camera setup updated for ID ${id}: IP=${ip}, RTSP=${rtsp}`);
             initVisca(id, ip);
+            saveConfig();
             // Broadcast state update
             wsInstance.getWss().clients.forEach(client => {
                 if (client.readyState === 1) {
