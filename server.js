@@ -165,6 +165,7 @@ function initVisca(camId, ip) {
 
 
 
+const activeTrackers = {};
 function startPythonTracker(camId, rtsp, rect) {
     if (activeTrackers[camId]) {
         activeTrackers[camId].send(JSON.stringify({ type: 'update_rect', rect }));
