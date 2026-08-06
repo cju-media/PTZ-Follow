@@ -163,18 +163,7 @@ function initVisca(camId, ip) {
 }
 
 
-    ws.on('message', (msg) => {
-        try {
-            const data = JSON.parse(msg);
-            if (data.type === 'setup') {
-                const trackingEnabled = state.cameras[data.camId] ? state.cameras[data.camId].trackingEnabled : false;
-                state.cameras[data.camId] = { ip: data.camIp, rtsp: data.camRtsp, trackingEnabled };
-                console.log(`UI Setup updated for ID ${data.camId}: IP=${data.camIp}, RTSP=${data.camRtsp}`);
-                initVisca(data.camId, data.camIp);
-                saveConfig();
-            } else if (data.type === 'ptz_correction') {
-                const trackingEnabled = state.cameras[data.camId] ? state.cameras[data.camId].trackingEnabled : false;
-                if (!trackingEnabled) return;
+
 
 function startPythonTracker(camId, rtsp, rect) {
     if (activeTrackers[camId]) {
