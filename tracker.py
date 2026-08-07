@@ -10,6 +10,39 @@ except ImportError:
     sys.stdout.flush()
     sys.exit(1)
 
+# Anti-drift tuning. CSRT doesn't always cleanly report failure when it loses the real
+# subject - it can quietly lock onto something else nearby and keep reporting success. These
+# guard against that:
+#   - MAX_JUMP_RATIO: reject a single-frame relock further than this fraction of the frame
+#     diagonal from the last good position. Real subject motion between adjacent frames is
+#     rarely this large; a big jump is almost always CSRT drifting onto the wrong thing.
+#   - LOST_GRACE_SECONDS: how long to keep trying to reacquire (handles brief occlusions)
+#     before giving up entirely and requiring a freshly drawn box, rather than letting CSRT
+#     keep hunting indefinitely.
+# (We also tried gating on tracker.getTrackingScore(), but it's not reliably calibrated
+# across OpenCV builds and was rejecting valid tracks outright - removed.)
+MAX_JUMP_RATIO = 0.25
+LOST_GRACE_SECONDS = 1.5
+
+# OpenCV's FFmpeg backend defaults to a ~30s internal timeout for both opening an RTSP stream
+# and for each individual read - so if the camera is unreachable (e.g. mid-reboot), cap.read()
+# can block for the full 30s before the reconnect loop below even gets a chance to try again.
+# Capping both much lower means a dead/rebooting camera is retried far more often, so tracking
+# resumes within a few seconds of the camera actually coming back online instead of being stuck
+# waiting out whichever multi-attempt timeout happened to be in progress.
+OPEN_TIMEOUT_MS = 5000
+READ_TIMEOUT_MS = 5000
+
+def open_capture(rtsp_link):
+    cap = cv2.VideoCapture(rtsp_link)
+    try:
+        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, OPEN_TIMEOUT_MS)
+        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, READ_TIMEOUT_MS)
+    except Exception:
+        # Not supported on this OpenCV build - falls back to its (longer) default timeout.
+        pass
+    return cap
+
 def process_stdin(tracker_state):
     for line in sys.stdin:
         try:
@@ -17,6 +50,11 @@ def process_stdin(tracker_state):
             if data.get('type') == 'update_rect':
                 tracker_state['rect'] = data['rect']
                 tracker_state['needs_init'] = True
+                tracker_state['active'] = True
+            elif data.get('type') == 'stop_tracking':
+                # Pause tracking but keep the process/RTSP connection alive and warm,
+                # so the next 'update_rect' can start tracking with no connection setup delay.
+                tracker_state['active'] = False
             elif data.get('type') == 'stop':
                 tracker_state['running'] = False
                 break
@@ -24,34 +62,41 @@ def process_stdin(tracker_state):
             pass
 
 def main():
-    if len(sys.argv) < 3:
+    if len(sys.argv) < 2:
         sys.exit(1)
 
     rtsp_link = sys.argv[1]
 
-    # rect should be a JSON string representing {x, y, width, height}
-    try:
-        initial_rect_data = json.loads(sys.argv[2])
-    except Exception as e:
-        sys.exit(1)
+    # rect (arg 2) is optional: if omitted, the process starts in standby - it keeps the
+    # RTSP connection warm by reading frames, but doesn't track anything until an
+    # 'update_rect' message arrives over stdin.
+    initial_rect_data = None
+    if len(sys.argv) >= 3:
+        try:
+            initial_rect_data = json.loads(sys.argv[2])
+        except Exception:
+            initial_rect_data = None
 
     tracker_state = {
         'running': True,
+        'active': initial_rect_data is not None,
         'rect': initial_rect_data,
-        'needs_init': True
+        'needs_init': initial_rect_data is not None
     }
 
     # Start thread to read stdin
     t = threading.Thread(target=process_stdin, args=(tracker_state,), daemon=True)
     t.start()
 
-    cap = cv2.VideoCapture(rtsp_link)
+    cap = open_capture(rtsp_link)
     if not cap.isOpened():
         print(json.dumps({'type': 'error', 'message': 'Cannot open video stream'}))
         sys.stdout.flush()
         sys.exit(1)
 
     tracker = None
+    last_good_bbox = None  # (x, y, w, h) of the last accepted match, for the jump-distance check
+    lost_since = None      # wall-clock time we started failing to get a good match, or None
 
     while tracker_state['running']:
         ret, frame = cap.read()
@@ -59,7 +104,13 @@ def main():
             # Reconnect
             cap.release()
             time.sleep(1)
-            cap = cv2.VideoCapture(rtsp_link)
+            cap = open_capture(rtsp_link)
+            continue
+
+        if not tracker_state['active']:
+            # Standby: keep reading frames to hold the RTSP connection open and current,
+            # but skip CSRT init/update entirely so this costs no extra tracking work.
+            tracker = None
             continue
 
         if tracker_state['needs_init']:
@@ -86,10 +137,30 @@ def main():
                 continue
 
             tracker_state['needs_init'] = False
+            # A fresh box is always trusted as-is, and resets the drift/loss tracking.
+            last_good_bbox = bbox
+            lost_since = None
 
         if tracker is not None:
             ok, bbox = tracker.update(frame)
+
+            if ok and last_good_bbox is not None:
+                frame_height, frame_width = frame.shape[:2]
+                diag = (frame_width ** 2 + frame_height ** 2) ** 0.5
+                prev_cx = last_good_bbox[0] + last_good_bbox[2] / 2
+                prev_cy = last_good_bbox[1] + last_good_bbox[3] / 2
+                cx = bbox[0] + bbox[2] / 2
+                cy = bbox[1] + bbox[3] / 2
+                jump = ((cx - prev_cx) ** 2 + (cy - prev_cy) ** 2) ** 0.5
+                if jump > MAX_JUMP_RATIO * diag:
+                    print(f'REJECTED (jump): {jump:.1f}px > {MAX_JUMP_RATIO * diag:.1f}px (25% of {diag:.1f}px diagonal)', file=sys.stderr)
+                    sys.stderr.flush()
+                    ok = False
+
             if ok:
+                last_good_bbox = bbox
+                lost_since = None
+
                 x, y, w, h = bbox
 
                 # frame dimensions
@@ -119,8 +190,21 @@ def main():
                 print(json.dumps(out_data))
                 sys.stdout.flush()
             else:
-                print(json.dumps({'type': 'lost'}))
-                sys.stdout.flush()
+                if lost_since is None:
+                    lost_since = time.time()
+
+                if time.time() - lost_since > LOST_GRACE_SECONDS:
+                    # Give up rather than let CSRT keep hunting and potentially drift onto
+                    # a different subject. Tracking stays paused until a fresh box is drawn.
+                    print(json.dumps({'type': 'lost', 'permanent': True}))
+                    sys.stdout.flush()
+                    tracker = None
+                    tracker_state['active'] = False
+                    last_good_bbox = None
+                    lost_since = None
+                else:
+                    print(json.dumps({'type': 'lost', 'permanent': False}))
+                    sys.stdout.flush()
 
         # Don't spin too fast if nothing is happening, but usually cap.read() blocks.
 

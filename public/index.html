@@ -81,6 +81,28 @@
             background: #dc3545;
         }
 
+        .camera-controls {
+            display: flex;
+            gap: 10px;
+            width: 100%;
+        }
+
+        .camera-controls button {
+            margin-top: 10px;
+            flex: 1;
+        }
+
+        .camera-controls button.paused {
+            background: #ffc107;
+            color: #212529;
+        }
+
+        .camera-card button:disabled {
+            background: #adb5bd;
+            color: #e9ecef;
+            cursor: not-allowed;
+        }
+
         /* Modal Styles */
         .modal {
             display: none;
@@ -103,6 +125,29 @@
             max-width: 600px;
             border-radius: 8px;
         }
+
+        .console-modal-content {
+            max-width: 900px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #console-output {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            font-family: "SF Mono", Menlo, Consolas, monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            padding: 12px;
+            border-radius: 4px;
+            height: 60vh;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        #console-output .log-line.level-ERROR { color: #f48771; }
+        #console-output .log-line.level-WARN { color: #dcdcaa; }
 
         .close {
             color: #aaa;
@@ -194,6 +239,8 @@
                 <button id="load-config-btn" class="btn btn-save" style="background: #17a2b8;">Load Config</button>
                 <input type="file" id="load-config-input" accept=".json" style="display: none;">
                 <button id="open-modal-btn" class="btn btn-save">Edit Cameras</button>
+                <button id="open-console-btn" class="btn btn-save" style="background: #343a40;">Open Console</button>
+                <button id="quit-app-btn" class="btn btn-remove">Quit App</button>
             </div>
         </div>
 
@@ -202,10 +249,22 @@
         </div>
     </div>
 
+    <!-- Console Modal -->
+    <div id="console-modal" class="modal">
+        <div class="modal-content console-modal-content">
+            <span class="close console-close">&times;</span>
+            <h2>Console</h2>
+            <div id="console-output"></div>
+            <div class="modal-actions">
+                <button id="console-clear-btn" class="btn btn-save" style="background: #6c757d;">Clear</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Edit Cameras Modal -->
     <div id="camera-modal" class="modal">
         <div class="modal-content">
-            <span class="close">&times;</span>
+            <span class="close camera-modal-close">&times;</span>
             <h2>Edit Cameras</h2>
 
             <div id="camera-list">
@@ -215,6 +274,7 @@
             <datalist id="discovered-ips"></datalist>
 
             <div class="modal-actions">
+                <button id="rescan-network-btn" class="btn btn-save" style="background: #17a2b8;">Rescan Network for Cameras</button>
                 <button id="add-cam-btn" class="btn btn-add">Add Camera</button>
             </div>
         </div>
