@@ -24,5 +24,13 @@
     <true/>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.video</string>
+    <!-- The app is intentionally headless (its only UI is the browser tab server.js opens via
+         "open()", plus the in-page "Open Console"/"Quit App" controls) - it never creates an
+         actual window. Without this key, macOS treats it as a normal foreground app, gives it a
+         Dock icon, and bounces that icon indefinitely since a windowless app never signals
+         "finished launching" the way Launch Services expects - from the user's side this looks
+         exactly like "the app never opened" even when the server underneath started up fine. -->
+    <key>LSUIElement</key>
+    <true/>
 </dict>
 </plist>

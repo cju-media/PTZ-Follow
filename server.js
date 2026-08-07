@@ -855,7 +855,15 @@ app.listen(PORT, () => {
         // ports - open the GUI for them automatically, same as the existing /gui/open OSC
         // command does on request. Left out in dev mode so it doesn't pop a browser tab on
         // every "node server.js" restart during development.
-        open(`http://localhost:${PORT}`);
+        open(`http://localhost:${PORT}`).catch(err => {
+            // open() returns a rejected promise (not a thrown error) on failure, so without this
+            // .catch() a failure here is an unhandled promise rejection - which, in a packaged
+            // app with no visible Terminal, goes nowhere the user or this project's own in-app
+            // console/log file would ever surface it. Silently getting no browser tab would look
+            // indistinguishable from "the app never opened" even though the server itself is
+            // running fine underneath.
+            console.error('Failed to auto-open the browser:', err);
+        });
     }
 });
 
@@ -938,7 +946,8 @@ oscServer.on('message', (msg) => {
             });
         }
     } else if (address === '/gui/open') {
-        open(`http://localhost:${PORT}`);
+        // See the .catch() on the startup open() call above for why this is needed.
+        open(`http://localhost:${PORT}`).catch(err => console.error('Failed to auto-open the browser:', err));
     } else if (address === '/camera/setup') {
         if (args.length >= 2) {
             const id = args[0];
