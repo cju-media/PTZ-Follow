@@ -88,13 +88,27 @@ console.error = captureConsole('ERROR', console.error.bind(console));
 // When packaged, point fluent-ffmpeg at the bundled, self-contained ffmpeg binary (built from
 // the same Homebrew ffmpeg this project already depends on in dev, with its dynamic library
 // dependencies collected alongside it via dylibbundler) instead of relying on a system install.
-// In dev, fall back to whatever "ffmpeg" resolves to on PATH, same as before.
 if (IS_PACKAGED) {
     const bundledFfmpegPath = path.join(EXECUTABLE_DIR, 'resources', 'ffmpeg', 'ffmpeg');
     if (fs.existsSync(bundledFfmpegPath)) {
         ffmpeg.setFfmpegPath(bundledFfmpegPath);
     } else {
         console.warn(`Bundled ffmpeg not found at ${bundledFfmpegPath} - falling back to PATH, which likely isn't set up on an end-user machine.`);
+    }
+} else {
+    // In dev, fluent-ffmpeg otherwise just does a bare PATH lookup for "ffmpeg" - fine when
+    // launched from an interactive Terminal shell (which sources .zprofile/.bash_profile and
+    // picks up Homebrew's bin dir), but this process is often spawned some other way instead
+    // (a Max/MSP "shell" object, Finder, a LaunchAgent, ...) whose child processes only inherit
+    // a bare macOS default PATH - notably missing /opt/homebrew/bin on Apple Silicon, where
+    // Homebrew's ffmpeg actually lives. Probe the common Homebrew locations directly and pin to
+    // whichever exists, so this doesn't silently fail with "Cannot find ffmpeg" depending on how
+    // the process happened to be launched. Leaves the plain PATH-lookup fallback intact for any
+    // other install location (e.g. a non-Homebrew ffmpeg already reachable via PATH).
+    const commonDevFfmpegPaths = ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg'];
+    const foundDevFfmpegPath = commonDevFfmpegPaths.find(p => fs.existsSync(p));
+    if (foundDevFfmpegPath) {
+        ffmpeg.setFfmpegPath(foundDevFfmpegPath);
     }
 }
 
@@ -111,6 +125,27 @@ const VISCA_RECONNECT_THRESHOLD = 2; // consecutive missed ACKs before auto-recr
 // further if it still overshoots.
 const MAX_PAN_SPEED = 12;  // out of a hardware max of 24
 const MAX_TILT_SPEED = 10; // out of a hardware max of 20
+
+// Same class of problem as the dev-mode ffmpeg path above: a bare "python3" in getTrackerCommand()
+// below otherwise just does a PATH lookup, which is fine from an interactive Terminal shell but
+// not from a Max/MSP "shell" object, Finder, a LaunchAgent, etc. - those only inherit a bare
+// macOS default PATH, which resolves "python3" to the Xcode Command Line Tools stub at
+// /usr/bin/python3 rather than wherever opencv-contrib-python actually got pip-installed, and
+// tracker.py then fails with "Cannot import cv2" despite it being installed. Prefer known
+// real-Python locations (in the order a Terminal shell's own PATH would normally resolve them)
+// over the CLT stub, so tracking works the same regardless of what launched the server. Falls
+// back to a bare "python3" lookup if none of these exist, matching the old behavior for any
+// other install location.
+//
+// Declared here, before loadConfig() runs below, rather than down next to getTrackerCommand()
+// itself - loadConfig() pre-warms tracker processes via ensureTrackerProcess() -> getTrackerCommand()
+// synchronously at startup, so this needs to already be initialized by then. A repeat of the same
+// VISCA_PORT/activeTrackers ordering bug this file has hit before: getTrackerCommand() is a
+// hoisted function declaration and is callable early, but a module-level const is only
+// initialized when its own declaration line actually runs - referencing it before that (as
+// loadConfig()'s pre-warm did when this lived next to getTrackerCommand() instead) throws
+// "Cannot access before initialization" and silently aborts config loading.
+const DEV_PYTHON3_CANDIDATES = ['/usr/local/bin/python3', '/opt/homebrew/bin/python3'];
 
 const app = express();
 const wsInstance = expressWs(app);
@@ -176,8 +211,21 @@ app.ws('/stream', (ws, req) => {
 
         currentCommand = command;
         const stream = command.pipe();
+
+        // Cap how far the client is allowed to fall behind before we start dropping data instead
+        // of queueing it. ws.send() doesn't block - if the browser's decode/render can't quite
+        // keep pace with the stream for even a moment (a slow frame, a backgrounded tab, a CPU
+        // hiccup), each chunk queues up behind the last rather than being discarded, and that
+        // backlog only ever grows: the stream drifts further and further behind the longer the
+        // connection stays open. (A page refresh only "catches up" because it opens a brand new
+        // ffmpeg process/socket with zero backlog, not because anything got faster.) ~250KB is
+        // roughly 2 seconds of backlog at this stream's 1000kbps video bitrate - past that,
+        // prefer a live view that's briefly glitchy (it self-heals within ~1s via the next
+        // keyframe) over one that's continuously, growing-ly late.
+        const MAX_BUFFERED_BYTES = 250 * 1024;
         stream.on('data', (data) => {
             if (ws.readyState === 1) {
+                if (ws.bufferedAmount > MAX_BUFFERED_BYTES) return; // client is behind - drop rather than queue
                 ws.send(data, { binary: true });
             }
         });
@@ -500,7 +548,8 @@ function getTrackerCommand() {
         const ext = process.platform === 'win32' ? '.exe' : '';
         return { command: path.join(EXECUTABLE_DIR, 'resources', 'tracker', `tracker${ext}`), baseArgs: [] };
     }
-    return { command: 'python3', baseArgs: ['-u', path.join(__dirname, 'tracker.py')] };
+    const python3Path = DEV_PYTHON3_CANDIDATES.find(p => fs.existsSync(p)) || 'python3';
+    return { command: python3Path, baseArgs: ['-u', path.join(__dirname, 'tracker.py')] };
 }
 
 function ensureTrackerProcess(camId, rtsp) {

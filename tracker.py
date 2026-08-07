@@ -1,7 +1,16 @@
 import sys
+import os
 import json
 import threading
 import time
+
+# Force RTSP over TCP for OpenCV's FFmpeg backend, mirroring the "-rtsp_transport tcp" server.js
+# already passes to its own ffmpeg invocation for the browser video stream. Without this, some
+# cameras (confirmed with this project's own camera) reject the RTSP control channel outright
+# over UDP with "405 Method Not Allowed" on DESCRIBE, so cv2.VideoCapture() never even gets to
+# the point of reading a frame. Must be set before any cv2.VideoCapture() call - OpenCV's FFmpeg
+# backend only reads this env var at capture-open time.
+os.environ.setdefault('OPENCV_FFMPEG_CAPTURE_OPTIONS', 'rtsp_transport;tcp')
 
 try:
     import cv2
@@ -34,7 +43,11 @@ OPEN_TIMEOUT_MS = 5000
 READ_TIMEOUT_MS = 5000
 
 def open_capture(rtsp_link):
-    cap = cv2.VideoCapture(rtsp_link)
+    # Must pass cv2.CAP_FFMPEG explicitly - confirmed by testing that without it, OpenCV's
+    # backend auto-detection for an "rtsp://" URL doesn't consistently route through the FFmpeg
+    # backend that reads OPENCV_FFMPEG_CAPTURE_OPTIONS above, silently ignoring the forced TCP
+    # transport and hitting the same "405 Method Not Allowed" as leaving both unset.
+    cap = cv2.VideoCapture(rtsp_link, cv2.CAP_FFMPEG)
     try:
         cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, OPEN_TIMEOUT_MS)
         cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, READ_TIMEOUT_MS)
@@ -88,9 +101,23 @@ def main():
     t = threading.Thread(target=process_stdin, args=(tracker_state,), daemon=True)
     t.start()
 
+    # Some cameras' embedded RTSP servers are simply flaky on connection setup - this project's
+    # own camera rejects a fresh DESCRIBE/SETUP with "405 Method Not Allowed" roughly 1 in 3
+    # attempts, at random, even though the exact same request succeeds moments later. The read
+    # loop below already tolerates this after a successful open (reconnect on a failed read), but
+    # the very first open had no such tolerance - one unlucky attempt at process startup meant an
+    # immediate fatal exit. Retry the initial open a few times before actually giving up.
+    INITIAL_OPEN_RETRIES = 5
+    INITIAL_OPEN_RETRY_DELAY_SECONDS = 1
     cap = open_capture(rtsp_link)
+    attempt = 1
+    while not cap.isOpened() and attempt < INITIAL_OPEN_RETRIES:
+        attempt += 1
+        cap.release()
+        time.sleep(INITIAL_OPEN_RETRY_DELAY_SECONDS)
+        cap = open_capture(rtsp_link)
     if not cap.isOpened():
-        print(json.dumps({'type': 'error', 'message': 'Cannot open video stream'}))
+        print(json.dumps({'type': 'error', 'message': f'Cannot open video stream after {INITIAL_OPEN_RETRIES} attempts'}))
         sys.stdout.flush()
         sys.exit(1)
 

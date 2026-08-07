@@ -54,7 +54,7 @@ class CameraTracker {
             canvas: this.videoCanvas,
             autoplay: true,
             audio: false,
-            disableGl: true
+            disableGl: false
         });
     }
 
