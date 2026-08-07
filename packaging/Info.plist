@@ -24,13 +24,15 @@
     <true/>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.video</string>
-    <!-- The app is intentionally headless (its only UI is the browser tab server.js opens via
-         "open()", plus the in-page "Open Console"/"Quit App" controls) - it never creates an
-         actual window. Without this key, macOS treats it as a normal foreground app, gives it a
-         Dock icon, and bounces that icon indefinitely since a windowless app never signals
-         "finished launching" the way Launch Services expects - from the user's side this looks
-         exactly like "the app never opened" even when the server underneath started up fine. -->
-    <key>LSUIElement</key>
-    <true/>
+    <!-- Deliberately omitting LSUIElement: this app previously had no Dock icon at all
+         (LSUIElement=true), but users expect a normal Dock presence to quit it the way they quit
+         any other Mac app (right-click Dock icon > Quit, or Cmd+Q while it's frontmost) rather
+         than relying solely on the in-page "Quit App" button. Whichever way the user quits it
+         (Dock, Cmd+Q, "killall ptz-tracker", a system logout) terminates this non-AppKit process
+         via SIGTERM - server.js has a SIGTERM handler (see gracefulShutdown()) that stops tracker
+         child processes cleanly before exiting, so this doesn't orphan them. Verified: with the
+         Dock icon present, the app launches and settles normally (a brief launch bounce, not
+         indefinite), and `kill -TERM` on the process - what Dock Quit/Cmd+Q ultimately send to a
+         non-AppKit app like this one - cleanly stops every tracker child before exiting. -->
 </dict>
 </plist>

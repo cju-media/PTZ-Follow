@@ -717,6 +717,29 @@ function stopPythonTracker(camId) {
     }
 }
 
+// Stops every tracker child process and exits. Shared by the UI's "Quit App" button (the
+// 'shutdown' control-websocket message below) and by the OS-signal handlers further down -
+// process.exit() alone doesn't signal child processes the way closing a terminal (and its whole
+// process group) used to, so without this, anything that quits the app other than the UI button
+// - the Dock icon's Quit, Cmd+Q, "killall ptz-tracker", a system logout/shutdown - would orphan
+// every running tracker.py process behind it. (Exactly the kind of leak that piled up repeatedly
+// during this project's own development, from restarting the dev server without also stopping
+// its children.)
+function gracefulShutdown(reason) {
+    console.log(`Shutting down (${reason}) - stopping all trackers.`);
+    Object.keys(activeTrackers).forEach(camId => stopPythonTracker(camId));
+    setTimeout(() => process.exit(0), 300);
+}
+
+// Dock icon Quit / Cmd+Q / "killall ptz-tracker" / system shutdown all terminate the process via
+// SIGTERM (this app has no window and isn't a Cocoa/AppKit app, so it doesn't otherwise
+// participate in the "Quit" Apple Event AppKit apps normally handle) - without this handler,
+// those would bypass gracefulShutdown() entirely and go straight to Node's default SIGTERM
+// behavior (an immediate exit with no cleanup). SIGINT covers Ctrl+C when running "node
+// server.js" directly in a terminal during dev.
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
 // Console-viewer websocket: streams captured console.log/warn/error output to the "Open
 // Console" panel in the web GUI. Sends the recent scrollback immediately on connect so opening
 // the panel isn't starting from a blank screen.
@@ -833,14 +856,11 @@ app.ws('/control', (ws, req) => {
                     });
                 }
             } else if (data.type === 'shutdown') {
-                // The packaged app has no visible Terminal window to close as a way to stop it,
-                // so this button in the GUI is the actual way to quit. Stop tracker child
-                // processes explicitly first - process.exit() doesn't automatically signal them
-                // the way closing a terminal (and its whole process group) used to.
-                console.log('Shutdown requested from UI - stopping all trackers and exiting.');
-                Object.keys(activeTrackers).forEach(camId => stopPythonTracker(camId));
+                // Still available as a fallback way to quit even with the Dock icon back (e.g. if
+                // the Apple Event never reaches the process for some reason) - see
+                // gracefulShutdown() for why it exists and what else triggers it.
                 ws.send(JSON.stringify({ type: 'shutting_down' }));
-                setTimeout(() => process.exit(0), 300);
+                gracefulShutdown('Quit App button');
             }
         } catch (err) {
             console.error("Control WS parse error", err);
