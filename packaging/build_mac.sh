@@ -16,8 +16,19 @@ set -e
 cd "$(dirname "$0")/.."
 PROJECT_ROOT="$(pwd)"
 PACKAGING_DIR="$PROJECT_ROOT/packaging"
+# The Node server, Python tracker, and web GUI live in their own repo (cju-media/PTZ-Follow-Node),
+# embedded here as a git submodule - see .gitmodules. Kept separate from this repo's packaging/Max
+# tooling so it can be reused standalone (e.g. as a submodule of a different consuming project)
+# without dragging along anything build-specific.
+SERVER_DIR="$PROJECT_ROOT/server"
 OUT_DIR="$PACKAGING_DIR/dist-mac"
 ARCH="$(uname -m)"
+
+if [ ! -f "$SERVER_DIR/package.json" ]; then
+    echo "ERROR: $SERVER_DIR/package.json not found - the server submodule looks uninitialized." >&2
+    echo "Run 'git submodule update --init' first." >&2
+    exit 1
+fi
 
 echo "== PTZ Follow macOS build ($ARCH) =="
 echo ""
@@ -35,18 +46,21 @@ pyinstaller --onedir --name tracker \
     --distpath "$PACKAGING_DIR/dist" \
     --workpath "$PACKAGING_DIR/build" \
     --specpath "$PACKAGING_DIR" \
-    "$PROJECT_ROOT/tracker.py"
+    "$SERVER_DIR/tracker.py"
 deactivate
 echo ""
 
 # --- 2. Node server: standalone executable via pkg ---
 echo "-- [2/6] Building server executable (pkg) --"
 
+echo "Installing server dependencies (npm install in $SERVER_DIR)..."
+(cd "$SERVER_DIR" && npm install)
+
 # node-osc's Server.js requires '#decode' via Node's package.json "imports" field, which pkg's
 # module resolver doesn't implement (it fails at runtime even when the target file is bundled).
 # Patch it to a direct relative require instead - safe, idempotent, and scoped to this build
 # venv/install only (a plain "npm install" for normal dev use is unaffected).
-NODE_OSC_SERVER="$PROJECT_ROOT/node_modules/node-osc/dist/lib/Server.js"
+NODE_OSC_SERVER="$SERVER_DIR/node_modules/node-osc/dist/lib/Server.js"
 if [ -f "$NODE_OSC_SERVER" ] && grep -q "require('#decode')" "$NODE_OSC_SERVER"; then
     sed -i '' "s#require('#decode')#require('./internal/decode.js')#" "$NODE_OSC_SERVER"
     echo "Patched node-osc for pkg compatibility."
@@ -54,7 +68,10 @@ fi
 
 mkdir -p "$PACKAGING_DIR/dist-node"
 rm -f "$PACKAGING_DIR/dist-node/ptz-tracker"
-npx --yes @yao-pkg/pkg "$PROJECT_ROOT"
+# --output is passed explicitly here rather than left to package.json's own "pkg" config (which
+# used to have an "outputPath" pointing back into this repo's packaging/ dir) - the server repo
+# is meant to be usable standalone, so it shouldn't need to know about this repo's own layout.
+npx --yes @yao-pkg/pkg "$SERVER_DIR" --output "$PACKAGING_DIR/dist-node/ptz-tracker"
 echo ""
 
 # --- 3. Portable ffmpeg: bundle the build machine's own ffmpeg + its dylib dependencies ---

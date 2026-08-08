@@ -41,7 +41,7 @@
                     "numoutlets": 1,
                     "outlettype": [ "" ],
                     "patching_rect": [ 40.0, 80.0, 405.0, 22.0 ],
-                    "text": "/usr/local/bin/node /Users/c/Documents/Programming/PTZ-Follow/server.js"
+                    "text": "/usr/local/bin/node /Users/c/Documents/Programming/PTZ-Follow/server/server.js"
                 }
             },
             {
@@ -96,7 +96,7 @@
                     "numoutlets": 1,
                     "outlettype": [ "" ],
                     "patching_rect": [ 40.0, 190.0, 320.0, 22.0 ],
-                    "text": "pkill -f PTZ-Follow/server.js"
+                    "text": "pkill -f PTZ-Follow/server/server.js"
                 }
             },
             {

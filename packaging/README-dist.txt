@@ -4,9 +4,8 @@ PTZ Follow - macOS App
 No installation needed - Node.js, Python, and ffmpeg are all bundled inside the app.
 
 TO RUN:
-  Double-click "PTZ Follow.app". Nothing visible happens for a moment (there's no app
-  window - this app runs quietly in the background), then your browser opens automatically
-  to the app.
+  Double-click "PTZ Follow.app". It appears in the Dock like a normal app, but has no
+  window of its own - after a moment your browser opens automatically to the app instead.
 
 TO SEE LOGS / TROUBLESHOOT:
   Click "Open Console" in the app's web page to view live server log output (VISCA
@@ -14,8 +13,9 @@ TO SEE LOGS / TROUBLESHOOT:
   Terminal window to check.
 
 TO STOP THE APP:
-  Click "Quit App" in the web page. (There's no window to close and no Dock icon to
-  right-click - this button is the way to stop it.)
+  Quit it the way you'd quit any Mac app - right-click its Dock icon and choose Quit, or
+  Cmd+Q while it's frontmost. "Quit App" in the web page does the same thing, as a
+  fallback if you'd rather not switch away from the browser.
 
 FIRST LAUNCH ("unidentified developer" warning):
   Since this app isn't signed with an Apple Developer certificate, macOS Gatekeeper will
