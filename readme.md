@@ -7,7 +7,7 @@ This repo holds the macOS build tooling and the Max patch. The server itself - `
 ## Getting the code
 
 ```bash
-git clone --recurse-submodules git@github.com:cju-media/PTZ-follow.git
+git clone --recurse-submodules git@github.com:cju-media/PTZ-Follow.git
 ```
 
 Already cloned without `--recurse-submodules`? Run:
