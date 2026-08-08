@@ -727,6 +727,19 @@ function stopPythonTracker(camId) {
 // its children.)
 function gracefulShutdown(reason) {
     console.log(`Shutting down (${reason}) - stopping all trackers.`);
+
+    // Tell every connected browser tab, not just whichever one (if any) triggered this - Dock
+    // Quit/Cmd+Q/SIGTERM/SIGINT/a system logout all reach here with no client "asking" at all,
+    // and even the UI's own "Quit App" button only involves the one tab that was clicked in. Without
+    // this, every other open tab just sees its websocket drop with no explanation and quietly
+    // retries reconnecting every 2s forever (see initControlWs() in app.js) - to someone watching
+    // the page, indistinguishable from the app having hung rather than actually quit.
+    wsInstance.getWss().clients.forEach(client => {
+        if (client.readyState === 1) {
+            client.send(JSON.stringify({ type: 'shutting_down' }));
+        }
+    });
+
     Object.keys(activeTrackers).forEach(camId => stopPythonTracker(camId));
     setTimeout(() => process.exit(0), 300);
 }
@@ -858,8 +871,8 @@ app.ws('/control', (ws, req) => {
             } else if (data.type === 'shutdown') {
                 // Still available as a fallback way to quit even with the Dock icon back (e.g. if
                 // the Apple Event never reaches the process for some reason) - see
-                // gracefulShutdown() for why it exists and what else triggers it.
-                ws.send(JSON.stringify({ type: 'shutting_down' }));
+                // gracefulShutdown() for why it exists, what else triggers it, and why it's the
+                // one that broadcasts 'shutting_down' rather than this handler doing it directly.
                 gracefulShutdown('Quit App button');
             }
         } catch (err) {

@@ -476,8 +476,19 @@ function initControlWs() {
                         });
                     }
                 } else if (data.type === 'shutting_down') {
+                    // Now broadcast to every connected tab (see gracefulShutdown() in server.js),
+                    // not just whichever one triggered it - this fires however the app was quit:
+                    // the in-page button, the Dock icon, Cmd+Q, or a system logout.
                     window.intentionalShutdown = true;
                     document.body.innerHTML = '<div style="text-align:center; margin-top:15%; font-family:sans-serif; color:#666;"><h1>PTZ Follow has been shut down</h1><p>You can close this window.</p></div>';
+
+                    // Best-effort auto-close: browsers only allow window.close() on a tab that was
+                    // opened by script (window.open()), and this one was opened by the OS's own
+                    // "open" command instead, so most browsers will just silently ignore this -
+                    // the message above is the part that's actually guaranteed to show. A short
+                    // delay first so the message is still visible if the close attempt is a no-op
+                    // (instant would look like nothing happened at all if it fails).
+                    setTimeout(() => { try { window.close(); } catch (e) { /* not closable - message above stands */ } }, 1500);
                 }
             } catch (err) {
                 console.error("Control WS parse error", err);
