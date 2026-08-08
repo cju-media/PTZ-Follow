@@ -14,8 +14,19 @@
     <string>1.0.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <!-- Points at packaging/AppWrapper.swift's compiled output, NOT ptz-tracker directly.
+         ptz-tracker is a bare pkg-built Node executable with no AppKit/Cocoa involvement, so as
+         CFBundleExecutable it can launch but can never behave like a normal Mac app in the Dock:
+         the Dock only stops bouncing an icon once the process signals "I'm a real GUI app and
+         I'm ready" via AppKit, which a plain command-line binary never does - its icon just
+         bounces forever. The Swift wrapper IS a real (windowless) AppKit app, so it settles in
+         the Dock normally and launches ptz-tracker as a child process; Cmd+Q/Dock Quit then
+         deliver a proper Apple Event to the wrapper (see applicationShouldTerminate in
+         AppWrapper.swift), which forwards a clean SIGTERM to ptz-tracker - triggering
+         server.js's own gracefulShutdown() (stops tracker child processes before exiting) -
+         rather than leaving Cmd+Q/Dock Quit with a non-cooperating process to guess at. -->
     <key>CFBundleExecutable</key>
-    <string>ptz-tracker</string>
+    <string>ptz-follow-launcher</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
@@ -24,15 +35,5 @@
     <true/>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.video</string>
-    <!-- Deliberately omitting LSUIElement: this app previously had no Dock icon at all
-         (LSUIElement=true), but users expect a normal Dock presence to quit it the way they quit
-         any other Mac app (right-click Dock icon > Quit, or Cmd+Q while it's frontmost) rather
-         than relying solely on the in-page "Quit App" button. Whichever way the user quits it
-         (Dock, Cmd+Q, "killall ptz-tracker", a system logout) terminates this non-AppKit process
-         via SIGTERM - server.js has a SIGTERM handler (see gracefulShutdown()) that stops tracker
-         child processes cleanly before exiting, so this doesn't orphan them. Verified: with the
-         Dock icon present, the app launches and settles normally (a brief launch bounce, not
-         indefinite), and `kill -TERM` on the process - what Dock Quit/Cmd+Q ultimately send to a
-         non-AppKit app like this one - cleanly stops every tracker child before exiting. -->
 </dict>
 </plist>

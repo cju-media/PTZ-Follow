@@ -10,7 +10,13 @@ packaging/build/
 packaging/dist/
 packaging/dist-node/
 packaging/dist-ffmpeg/
+packaging/dist-wrapper/
 packaging/dist-mac/
 packaging/*.spec
 packaging/AppIcon.iconset/
 packaging/AppIcon.icns
+# This project lives under ~/Documents, which iCloud Drive syncs - rapidly rm+recreating
+# AppIcon.icns on repeated local builds can trigger iCloud's "conflicted copy" numbered-duplicate
+# naming (AppIcon 2.icns, AppIcon 3.icns, ...). Harmless leftover clutter, not a build artifact,
+# but shouldn't ever get committed.
+packaging/AppIcon [0-9]*.icns

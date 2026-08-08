@@ -23,7 +23,7 @@ echo "== PTZ Follow macOS build ($ARCH) =="
 echo ""
 
 # --- 1. Python tracker: standalone executable via PyInstaller ---
-echo "-- [1/5] Building tracker executable (PyInstaller) --"
+echo "-- [1/6] Building tracker executable (PyInstaller) --"
 if [ ! -d "$PACKAGING_DIR/build-venv" ]; then
     python3 -m venv "$PACKAGING_DIR/build-venv"
 fi
@@ -40,7 +40,7 @@ deactivate
 echo ""
 
 # --- 2. Node server: standalone executable via pkg ---
-echo "-- [2/5] Building server executable (pkg) --"
+echo "-- [2/6] Building server executable (pkg) --"
 
 # node-osc's Server.js requires '#decode' via Node's package.json "imports" field, which pkg's
 # module resolver doesn't implement (it fails at runtime even when the target file is bundled).
@@ -58,7 +58,7 @@ npx --yes @yao-pkg/pkg "$PROJECT_ROOT"
 echo ""
 
 # --- 3. Portable ffmpeg: bundle the build machine's own ffmpeg + its dylib dependencies ---
-echo "-- [3/5] Bundling ffmpeg --"
+echo "-- [3/6] Bundling ffmpeg --"
 if ! command -v dylibbundler >/dev/null 2>&1; then
     echo "dylibbundler not found - installing via Homebrew..."
     brew install dylibbundler
@@ -79,7 +79,7 @@ dylibbundler -od -b \
 echo ""
 
 # --- 4. App icon: build a real .icns from packaging/AppIcon.png ---
-echo "-- [4/5] Building app icon --"
+echo "-- [4/6] Building app icon --"
 if [ -f "$PACKAGING_DIR/AppIcon.png" ]; then
     rm -rf "$PACKAGING_DIR/AppIcon.iconset" "$PACKAGING_DIR/AppIcon.icns"
     mkdir -p "$PACKAGING_DIR/AppIcon.iconset"
@@ -99,11 +99,24 @@ else
 fi
 echo ""
 
-# --- 5. Assemble the final .app bundle ---
-# No wrapper/launcher script needed: CFBundleExecutable points directly at ptz-tracker, and the
-# app has no visible Terminal window - its "Open Console" button (streamed from the server over
-# a websocket) and Quit App button are how you see log output and stop it, respectively.
-echo "-- [5/5] Assembling $OUT_DIR --"
+# --- 5. Native Dock launcher (Swift/AppKit) ---
+# ptz-tracker (built above) is a bare pkg-built Node executable with no AppKit/Cocoa involvement,
+# so it can't be CFBundleExecutable directly and still behave like a normal Mac app in the Dock -
+# the Dock only stops bouncing an icon once the app signals "I'm a real GUI app and I'm ready" via
+# AppKit, which a plain command-line binary never does. This tiny wrapper IS a real (windowless)
+# AppKit app: it settles in the Dock normally, launches ptz-tracker as a child process, and
+# forwards Cmd+Q/Dock Quit to it as a clean SIGTERM (which server.js's own gracefulShutdown()
+# handles) instead of leaving those with nothing to actually terminate.
+echo "-- [5/6] Building native Dock launcher (swiftc) --"
+mkdir -p "$PACKAGING_DIR/dist-wrapper"
+swiftc -O "$PACKAGING_DIR/AppWrapper.swift" -o "$PACKAGING_DIR/dist-wrapper/ptz-follow-launcher"
+echo ""
+
+# --- 6. Assemble the final .app bundle ---
+# CFBundleExecutable points at the Swift launcher above, not ptz-tracker directly - see step 5.
+# The app still has no visible Terminal window either way - its "Open Console" button (streamed
+# from the server over a websocket) and Quit App button are how you see log output and stop it.
+echo "-- [6/6] Assembling $OUT_DIR --"
 APP_DIR="$OUT_DIR/PTZ Follow.app"
 rm -rf "$OUT_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS/resources" "$APP_DIR/Contents/Resources"
@@ -116,6 +129,12 @@ fi
 
 cp "$PACKAGING_DIR/dist-node/ptz-tracker" "$APP_DIR/Contents/MacOS/ptz-tracker"
 chmod +x "$APP_DIR/Contents/MacOS/ptz-tracker"
+
+cp "$PACKAGING_DIR/dist-wrapper/ptz-follow-launcher" "$APP_DIR/Contents/MacOS/ptz-follow-launcher"
+chmod +x "$APP_DIR/Contents/MacOS/ptz-follow-launcher"
+# Apple Silicon refuses to run any unsigned Mach-O binary at all, even locally - ad-hoc sign it
+# the same way dylibbundler's ffmpeg gets signed below, since swiftc doesn't always do this itself.
+codesign --force -s - "$APP_DIR/Contents/MacOS/ptz-follow-launcher"
 
 cp -R "$PACKAGING_DIR/dist/tracker" "$APP_DIR/Contents/MacOS/resources/tracker"
 cp -R "$PACKAGING_DIR/dist-ffmpeg" "$APP_DIR/Contents/MacOS/resources/ffmpeg"
