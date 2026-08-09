@@ -13,6 +13,9 @@
 // only exists to give the process tree a real AppKit presence and a clean shutdown path.
 import Cocoa
 
+// Must match PORT in server.js.
+private let serverURL = URL(string: "http://localhost:9356")!
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var child: Process?
 
@@ -34,6 +37,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("PTZ Follow: failed to launch ptz-tracker: \(error)")
             NSApplication.shared.terminate(nil)
         }
+    }
+
+    // Fires when the user clicks the Dock icon (or double-clicks the app in Finder again)
+    // while it's already running - e.g. they closed the browser tab but left the app itself
+    // open. A bare Node process has no way to receive this (it's an AppKit/Apple Event
+    // concept - "reopen" - that only a real NSApplication delegate gets), which is why this
+    // wrapper exists at all rather than making ptz-tracker CFBundleExecutable directly. The
+    // server is still alive as our child process, so just reopen the browser tab - no need to
+    // restart anything.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        NSWorkspace.shared.open(serverURL)
+        return true
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
